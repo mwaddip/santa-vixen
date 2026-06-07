@@ -1,0 +1,6 @@
+# Vixen's toolchain — self-provisioned by santa-run via `mise exec`
+# (presence-as-state: it lives with the runner, so SANTA's ./conform stays
+# toolchain-agnostic). rust is rustup-delegated by mise's core backend; pinned
+# to the same version as arkadianet/ergo's rust-toolchain.toml.
+[tools]
+rust = "1.95.0"

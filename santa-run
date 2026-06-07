@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# santa-run <impl-path> <vectors-dir> <out-dir>  — emit actuals for the orchestrator.
+#
+# SANTA owns the impl checkout (runner-integration contract §2-3): it clones
+# runner.json's `impl` (<url>#<ref>) into a per-instance cache and passes the
+# containing dir as $1; our dependency is at $1/ergo (the arkadianet/ergo
+# workspace). Wire our fixed Cargo path-dep (../ergo) to that checkout, then
+# build + emit.
+#
+# Build-identity patch (runner-contract §3, declared in README + patches/):
+# arkadianet exposes no public arbitrary-root eval entry, so the build applies
+# patches/0001-conformance-eval-hook.patch — additive and consensus-inert (one
+# new module + one `pub mod` line). conform's checkout step is a plain
+# `git checkout` (no -f), so the tree MUST be pristine again afterwards or the
+# next pin bump wedges: heal any crashed previous run on entry, apply, and
+# restore via the EXIT trap (runs on success and failure alike).
+#
+# Toolchain self-provisioned (presence-as-state: mise.toml) — re-exec once
+# under `mise exec` so cargo is on PATH for the build. rust pinned to the same
+# version as arkadianet's rust-toolchain.toml.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [ -z "${SANTA_MISE_ACTIVE:-}" ]; then
+  mise trust "$here/mise.toml" >/dev/null
+  mise --cd "$here" install
+  exec env SANTA_MISE_ACTIVE=1 mise --cd "$here" exec -- "$0" "$@"
+fi
+impl="$(cd "$1" && pwd)"
+repo="$impl/ergo"
+ln -sfn "$repo" "$here/../ergo"
+# Full restore = tracked modifications (checkout) + the patch's NEW module,
+# which is untracked (checkout alone leaves it and the next apply would
+# wedge). The clean is scoped to the one dir the patch adds files under —
+# keep the path in step with the patch if it ever grows.
+restore() {
+  git -C "$repo" checkout -- .
+  git -C "$repo" clean -fd -q -- ergo-sigma/src/evaluator/
+}
+restore   # heal a crashed previous run before applying afresh
+git -C "$repo" apply "$here/patches/0001-conformance-eval-hook.patch"
+trap restore EXIT
+cargo build --release --manifest-path "$here/Cargo.toml" >/dev/null
+"$here/target/release/vixen" emit "$2" "$3"

@@ -1,0 +1,60 @@
+diff --git a/ergo-sigma/src/evaluator/conformance.rs b/ergo-sigma/src/evaluator/conformance.rs
+new file mode 100644
+index 0000000..aeb0e29
+--- /dev/null
++++ b/ergo-sigma/src/evaluator/conformance.rs
+@@ -0,0 +1,44 @@
++//! Public conformance hook: arbitrary-root ErgoTree evaluation.
++//!
++//! The node's own consensus path reduces a tree to a `SigmaBoolean`
++//! ([`reduce_expr_with_cost`]) — the root must evaluate to
++//! `SigmaProp`/`Bool`. A cross-implementation conformance suite (e.g.
++//! SANTA) instead needs the typed [`Value`] an arbitrary-rooted
++//! expression evaluates to, plus the raw JIT cost, so its vectors can
++//! grade value and cost independently.
++//!
++//! This module is **additive and consensus-inert**: it adds no
++//! semantics, changes no existing code path, and is never called by the
++//! node. It is the public twin of the test-only `eval_to_value` in
++//! `dispatch.rs`, with the cost accumulator threaded out.
++//!
++//! [`reduce_expr_with_cost`]: super::reduce_expr_with_cost
++
++use ergo_primitives::cost::CostAccumulator;
++use ergo_ser::opcode::Expr;
++use ergo_ser::sigma_type::SigmaType;
++use ergo_ser::sigma_value::SigmaValue;
++
++use super::dispatch::eval_expr;
++use super::types::{Env, EvalError, ReductionContext, Value};
++
++/// Evaluate `expr` to its typed [`Value`] under `ctx`, charging JIT
++/// cost into `cost`.
++///
++/// Mirrors the evaluator's internal entry exactly (fresh environment,
++/// depth 0, no trace); unlike [`reduce_expr_with_cost`] the result is
++/// not coerced to a sigma proposition, so non-`SigmaProp` roots are
++/// returned as-is.
++///
++/// [`reduce_expr_with_cost`]: super::reduce_expr_with_cost
++pub fn eval_to_value_with_cost(
++    expr: &Expr,
++    ctx: &ReductionContext<'_>,
++    constants: &[(SigmaType, SigmaValue)],
++    cost: &mut CostAccumulator,
++) -> Result<Value, EvalError> {
++    let mut env = Env::new();
++    let mut depth = 0usize;
++    let mut trace = None;
++    eval_expr(expr, ctx, constants, &mut env, &mut depth, cost, &mut trace)
++}
+diff --git a/ergo-sigma/src/evaluator/mod.rs b/ergo-sigma/src/evaluator/mod.rs
+index 0b60445..62d7d62 100644
+--- a/ergo-sigma/src/evaluator/mod.rs
++++ b/ergo-sigma/src/evaluator/mod.rs
+@@ -11,3 +11,5 @@ pub use types::*;
+ 
+ #[cfg(test)]
+ mod tests;
++
++pub mod conformance;

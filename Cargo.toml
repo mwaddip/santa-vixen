@@ -1,0 +1,27 @@
+[package]
+name = "vixen"
+version = "0.1.0"
+edition = "2021"
+description = "Vixen — the arkadianet/ergo runner for the SANTA conformance suite"
+
+# arkadianet/ergo as a sibling checkout: `../ergo` is the workspace root (the
+# dir holding ergo-sigma/, ergo-ser/, …). Under SANTA, santa-run wires it
+# (`ln -sfn "$1/ergo" ../ergo`) to the orchestrator-owned checkout at the
+# runner.json pin; for standalone dev, symlink a local clone yourself:
+#   ln -sfn ~/projects/arkadianet/ergo ~/projects/ergo
+#
+# The eval-tier entry (`evaluator::conformance`) exists only after applying
+# patches/0001-conformance-eval-hook.patch to the checkout (additive,
+# consensus-inert; applied by santa-run at build time, reverted after).
+[dependencies]
+ergo-primitives = { path = "../ergo/ergo-primitives" }
+ergo-ser = { path = "../ergo/ergo-ser" }
+ergo-sigma = { path = "../ergo/ergo-sigma" }
+# test-helpers exposes the production ErgoBox→EvalBox bridge (same code path,
+# feature-gated visibility) — used to build the pinned SELF box.
+ergo-validation = { path = "../ergo/ergo-validation", features = ["test-helpers"] }
+serde_json = "1"
+# Pinned to the same majors as arkadianet's workspace — these types appear in
+# its public API surface (ReductionContext.extension / SigmaValue::BigInt).
+indexmap = "2"
+num-bigint = "0.4"
