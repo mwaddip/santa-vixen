@@ -8,6 +8,10 @@ JVM reference, sigma-rust, ergots, or Fleet.
 A thin adapter per the SANTA runner contracts: vector in → blind
 `{value, cost, error}` actuals out; the orchestrator owns the comparison.
 
+> **Arkadianet maintainers:** [`FOR-ARKADIANET.md`](FOR-ARKADIANET.md) explains
+> SANTA, how Vixen drives your code, the findings worth acting on (the avltree
+> DoS class first), and how to engage.
+
 ```
 runner.json   manifest — name/label, version v6, tiers [eval, wire], cost
               true, impl = arkadianet/ergo #main (bare branch — latest tip;
