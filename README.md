@@ -9,8 +9,9 @@ A thin adapter per the SANTA runner contracts: vector in → blind
 `{value, cost, error}` actuals out; the orchestrator owns the comparison.
 
 ```
-runner.json   manifest — name/label, version v6, tiers [eval], cost true,
-              impl pinned to arkadianet/ergo main@<sha>
+runner.json   manifest — name/label, version v6, tiers [eval, wire], cost
+              true, impl = arkadianet/ergo #main (bare branch — latest tip;
+              conform records the resolved sha per run)
 santa-run     entrypoint: mise self-provision → wire ../ergo to the SANTA
               checkout → apply the build-identity patch → build → emit →
               restore the checkout (EXIT trap)
@@ -19,6 +20,8 @@ patches/      the declared build-identity override (see below)
 src/          main.rs (emit + self-compare modes, never-panic net)
               eval.rs (canonical context pin §2, outcome mapping §3)
               sval.rs (SValue ⇄ JSON bridge §4, both directions)
+              wire.rs (byte round-trips: Constant · Box · Transaction ·
+              Header · SigmaBoolean, via ergo-ser's own codecs)
 ```
 
 ## The build-identity patch (runner-contract §3)
@@ -32,8 +35,11 @@ path changes; DeserializeContext stays arkadianet's inline production
 behavior; the patch only exposes the evaluator's own entry with the cost
 accumulator threaded out. Applied by `santa-run` at build time and reverted
 after (the SANTA-owned checkout stays pristine for the next fetch+checkout).
-Upstreaming it as an arkadianet PR is the intended endgame; the patch is
-validated against the `runner.json` pin and moves with it.
+Upstreaming it as an arkadianet PR is the intended endgame. The `impl` ref
+tracks `#main` (latest tip): the patch is append-only against a stable
+14-line `mod.rs`, so conflicts are rare — when main does move under it, the
+runner shows ⚠️ could-not-build in the grid until the patch is rebased
+(`git apply --check` against the new tip is the whole pre-flight).
 
 ## Status
 
@@ -48,10 +54,15 @@ validated against the `runner.json` pin and moves with it.
   zeroed ×2, length 133v135 ×1, decodePoint off-curve/zero-lead ×2) · 3
   not-implemented (substConstants). All candidate impl findings — surfaced,
   not yet routed upstream.
-- **Wire + transaction tiers: not built yet.** Both are patch-free
-  (`ergo-ser` round-trips; `ergo-validation::validate_transaction` over a
-  synthetic UtxoView + `ergo-rest-json` decode). Block tier once SANTA's
-  contract for it lands.
+- **Wire tier: live.** First standing: **210 nice / 3 coal / 213 entries**.
+  The 3 coals share one root cause — re-encoding deeply-nested collection
+  types, ergo-ser's type writer emits the compressed nested-Coll prefix
+  (`0x18…`) where the JVM canonical form is the general `0x0c 0x0c…`
+  encoding (Constant.json coll_62/63/69). Patch-free: pure
+  `read_*`/`write_*` round-trips through the node's own codecs.
+- **Transaction tier: not built yet.** Patch-free
+  (`ergo-validation::validate_transaction` over a synthetic UtxoView +
+  `ergo-rest-json` decode). Block tier once SANTA's contract for it lands.
 
 ## Standalone dev
 

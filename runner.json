@@ -2,7 +2,7 @@
   "name": "vixen",
   "label": "vixen (arkadianet/ergo)",
   "version": "v6",
-  "tiers": ["eval"],
+  "tiers": ["eval", "wire"],
   "cost": true,
-  "impl": "https://github.com/arkadianet/ergo.git#main@08ee11ef04805a59c215355f40e853234bbe6a5b"
+  "impl": "https://github.com/arkadianet/ergo.git#main"
 }

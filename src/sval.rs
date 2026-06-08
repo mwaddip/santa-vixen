@@ -451,3 +451,120 @@ pub fn decode_constant(j: &J) -> Result<(SigmaType, SigmaValue), BridgeError> {
         }
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ergo_sigma::evaluator::{sigma_to_value, EvalBox};
+    use serde_json::json;
+
+    /// A BoxEnv over dummy boxes — primitive round-trips never resolve it.
+    fn with_env<R>(f: impl FnOnce(&BoxEnv<'_>) -> R) -> R {
+        let b = EvalBox::simple(0, Vec::new());
+        f(&BoxEnv { self_box: &b, inputs: &[], outputs: &[], data_inputs: &[] })
+    }
+
+    /// Round-trip a value-preserving SValue: JSON → (SigmaType, SigmaValue)
+    /// → evaluator Value (the impl's own constant lowering) → JSON.
+    fn roundtrip(j: J) {
+        let (tpe, val) = decode_constant(&j).expect("decode");
+        let v = sigma_to_value(&tpe, &val).expect("sigma_to_value");
+        let back = with_env(|env| encode_value(&v, env)).expect("encode");
+        assert_eq!(back, j, "round-trip mismatch");
+    }
+
+    #[test]
+    fn rt_bool_and_numerics() {
+        roundtrip(json!({"kind": "Boolean", "value": true}));
+        roundtrip(json!({"kind": "Byte", "value": -128}));
+        roundtrip(json!({"kind": "Short", "value": 32767}));
+        roundtrip(json!({"kind": "Int", "value": -2147483648i64}));
+    }
+
+    #[test]
+    fn rt_long_bigint_unsigned_are_strings() {
+        roundtrip(json!({"kind": "Long", "value": "9223372036854775807"}));
+        roundtrip(json!({"kind": "Long", "value": "-9223372036854775808"}));
+        roundtrip(json!({"kind": "BigInt", "value": "-45"}));
+        roundtrip(json!({"kind": "BigInt", "value": "123456789012345678901234567890"}));
+        roundtrip(json!({"kind": "UnsignedBigInt", "value": "0"}));
+        // 2^256 - 1: above the signed ceiling — valid unsigned.
+        roundtrip(json!({
+            "kind": "UnsignedBigInt",
+            "value": "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+        }));
+    }
+
+    #[test]
+    fn rt_colls_tuple_option() {
+        roundtrip(json!({"kind": "Coll", "elem": {"tag": "SByte"}, "items": [
+            {"kind": "Byte", "value": 0}, {"kind": "Byte", "value": 8}, {"kind": "Byte", "value": -45}]}));
+        roundtrip(json!({"kind": "Coll", "elem": {"tag": "SInt"}, "items": [
+            {"kind": "Int", "value": 1}, {"kind": "Int", "value": 2}]}));
+        roundtrip(json!({"kind": "Tuple", "items": [
+            {"kind": "Coll", "elem": {"tag": "SByte"}, "items": [{"kind": "Byte", "value": 1}]},
+            {"kind": "Int", "value": 0}]}));
+        roundtrip(json!({"kind": "Option", "value": {"kind": "Int", "value": 2}}));
+    }
+
+    #[test]
+    fn rt_sigmaprop_groupelement_avltree() {
+        roundtrip(json!({"kind": "SigmaProp", "raw_hex": "d3"})); // TrivialProp(true)
+        roundtrip(json!({"kind": "SigmaProp",
+            "raw_hex": "cd02288f0e55610c3355c89ed6c5de43cf20da145b8c54f03a29f481e540d94e9a69"}));
+        roundtrip(json!({"kind": "GroupElement",
+            "bytes_hex": "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"}));
+        // Blessed AvlTreeData fixture (AvlTree_properties_equivalence input).
+        roundtrip(json!({"kind": "AvlTree",
+            "bytes_hex": "000183807f66b301530120ff7fc6bd6601ff01ff7f7d2bedbbffff00187fe8909406010101"}));
+    }
+
+    /// The Refused/Decode boundary: bytes the LIBRARY parses-and-rejects
+    /// classify as Refused (its verdict → runner `errored`); JSON the bridge
+    /// cannot dispatch classifies as Decode (bridge failure → `panicked`).
+    #[test]
+    fn refused_vs_decode_classification() {
+        let r = decode_constant(&json!({"kind": "Box", "bytes_hex": "00"}));
+        assert!(matches!(r, Err(BridgeError::Refused(_))), "got {r:?}");
+        // SHeader: the impl's typed wire-reader refusal — Refused, not Decode.
+        let h = decode_constant(&json!({"kind": "Header", "bytes_hex": "00"}));
+        assert!(matches!(h, Err(BridgeError::Refused(_))), "got {h:?}");
+        let d = decode_constant(&json!({"kind": "Nope", "value": 1}));
+        assert!(matches!(d, Err(BridgeError::Decode(_))), "got {d:?}");
+    }
+
+    /// Every leaf tag in runner-contract §4 maps to its EXACT string both
+    /// ways (no Debug fallback on encode, no "unsupported" on decode).
+    #[test]
+    fn stype_tag_map_total_over_contract_s4() {
+        let leaves = [
+            (SigmaType::SBoolean, "SBoolean"),
+            (SigmaType::SByte, "SByte"),
+            (SigmaType::SShort, "SShort"),
+            (SigmaType::SInt, "SInt"),
+            (SigmaType::SLong, "SLong"),
+            (SigmaType::SBigInt, "SBigInt"),
+            (SigmaType::SUnsignedBigInt, "SUnsignedBigInt"),
+            (SigmaType::SGroupElement, "SGroupElement"),
+            (SigmaType::SSigmaProp, "SSigmaProp"),
+            (SigmaType::SBox, "SBox"),
+            (SigmaType::SHeader, "SHeader"),
+            (SigmaType::SPreHeader, "SPreHeader"),
+            (SigmaType::SAvlTree, "SAvlTree"),
+            (SigmaType::SUnit, "SUnit"),
+            (SigmaType::SAny, "SAny"),
+        ];
+        for (t, tag) in leaves {
+            assert_eq!(encode_stype(&t), json!({"tag": tag}), "encode {tag}");
+            assert_eq!(decode_stype(&json!({"tag": tag})).expect(tag), t, "decode {tag}");
+        }
+        for j in [
+            json!({"tag": "SColl", "elem": {"tag": "SAvlTree"}}),
+            json!({"tag": "SOption", "elem": {"tag": "SAvlTree"}}),
+            json!({"tag": "STuple", "items": [{"tag": "SInt"}, {"tag": "SAvlTree"}]}),
+        ] {
+            let t = decode_stype(&j).expect("recursive decode");
+            assert_eq!(encode_stype(&t), j, "recursive round-trip");
+        }
+    }
+}

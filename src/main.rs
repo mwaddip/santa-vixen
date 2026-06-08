@@ -15,6 +15,7 @@
 
 mod eval;
 mod sval;
+mod wire;
 
 use serde_json::Value as J;
 use std::path::{Path, PathBuf};
@@ -68,10 +69,13 @@ fn caught_actual<F: FnOnce() -> J + std::panic::UnwindSafe>(f: F) -> J {
 fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
     let text = std::fs::read_to_string(path).expect("read vector file");
     let vector: J = serde_json::from_str(&text).expect("parse vector JSON");
-    let is_eval = vector["schema"]
-        .as_str()
-        .is_some_and(|s| s.starts_with("santa-eval/"));
-    if !is_eval {
+    // Dispatch on the schema discriminator: wire entries round-trip
+    // `bytes_hex` (the blessed expected IS the entry's own bytes); eval
+    // entries evaluate `tree_bytes_hex` against the blessed `expected`.
+    let schema = vector["schema"].as_str().unwrap_or("");
+    let is_eval = schema.starts_with("santa-eval/");
+    let is_wire = schema.starts_with("santa-wire/");
+    if !is_eval && !is_wire {
         return Vec::new();
     }
     let entries = match vector["entries"].as_array() {
@@ -82,6 +86,17 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
         .iter()
         .map(|entry| {
             let name = entry["name"].as_str().unwrap_or("<unnamed>").to_string();
+            if is_wire {
+                let kind = entry["kind"].as_str().expect("wire entry missing kind");
+                let bytes_hex = entry["bytes_hex"]
+                    .as_str()
+                    .expect("wire entry missing bytes_hex");
+                let actual = caught_actual(std::panic::AssertUnwindSafe(|| {
+                    wire::run_entry(kind, bytes_hex).to_json()
+                }));
+                let expected = serde_json::json!({"bytes_hex": bytes_hex, "error": J::Null});
+                return (name, actual, expected);
+            }
             let tree_hex = entry["tree_bytes_hex"]
                 .as_str()
                 .expect("entry missing tree_bytes_hex");
