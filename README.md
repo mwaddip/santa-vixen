@@ -41,6 +41,29 @@ tracks `#main` (latest tip): the patch is append-only against a stable
 runner shows ⚠️ could-not-build in the grid until the patch is rebased
 (`git apply --check` against the new tip is the whole pre-flight).
 
+## Branches: two instances (blitzen-develop/eni pattern)
+
+Same arkadianet node, two declared build subjects:
+
+- **`main`** — `vixen`, on crates.io `ergo_avltree_rust = "0.1.1"` (arkadianet as
+  it ships). The bare-node subject; the avltree panics surface as the finding.
+- **`avltree-fork`** — `vixen-avltree-fork`, adds a `[patch.crates-io]` redirect
+  of arkadianet's transitive `ergo_avltree_rust` to the
+  [mwaddip fork](https://github.com/mwaddip/ergo_avltree_rust) (which returns
+  `Err` where crates.io panics — ergoplatform/ergo_avltree_rust#14). Shows what
+  the fork resolves, on a second independent node. Override declared per
+  runner-contract §3; the checkout is untouched (pure manifest line).
+
+**avltree-fork vs main (eval, 2026-06-08):** the fork eliminates **all 10**
+in-script avltree DoS panics (crash → graceful `Err`); 1 panic remains and is
+unrelated (`i64::MIN / -1` in `arithmetic.rs`). Of the 10: **3 flip to nice**
+(now match the JVM), **7 become clean non-panic outcomes that still diverge**
+semantically — arkadianet maps avltree-op-failure to `errored` where the JVM
+returns `false`/`Option None` (`contains` on a bad/empty/truncated proof), and
+returns a value where the JVM `errored` (`insert` wrong-val-len). The panic was
+masking a second layer of consensus-relevant divergence the fork makes gradeable.
+Net: 1874→1877 nice. Wire unaffected.
+
 ## Status
 
 - **Eval tier: live.** First full-corpus standing (self-compare, 2026-06-08,

@@ -25,3 +25,15 @@ serde_json = "1"
 # its public API surface (ReductionContext.extension / SigmaValue::BigInt).
 indexmap = "2"
 num-bigint = "0.4"
+
+# Build-identity override (runner-contract §3) — THE avltree-fork INSTANCE ONLY.
+# arkadianet depends on crates.io `ergo_avltree_rust = "0.1.1"`, which `.unwrap()`/
+# `assert!`-panics on malformed proofs and wrong-length op values (the f4 panic
+# classes; ergoplatform/ergo_avltree_rust#14). vixen (this crate) is the cargo
+# build root, so this `[patch.crates-io]` redirects arkadianet's TRANSITIVE
+# ergo_avltree_rust to the mwaddip fork (returns Err where crates.io panics) for
+# THIS build only — the arkadianet checkout is untouched. The bare-node `vixen`
+# (branch main) stays on crates.io and keeps surfacing the panics as the finding;
+# this instance shows what the fork resolves. Cargo.lock pins the resolved rev.
+[patch.crates-io]
+ergo_avltree_rust = { git = "https://github.com/mwaddip/ergo_avltree_rust.git", branch = "main" }

@@ -1,6 +1,6 @@
 {
-  "name": "vixen",
-  "label": "vixen (arkadianet/ergo)",
+  "name": "vixen-avltree-fork",
+  "label": "vixen (arkadianet/ergo · avltree fork)",
   "version": "v6",
   "tiers": ["eval", "wire"],
   "cost": true,
