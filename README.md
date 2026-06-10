@@ -47,23 +47,19 @@ runner shows ⚠️ could-not-build in the grid until the patch is rebased
 
 ## Status
 
-- **Eval tier: live.** First full-corpus standing (self-compare, 2026-06-08,
-  arkadianet `08ee11ef`): **1874 nice / 414 coal / 2288 entries**. Coal by
-  class: 186 cost (NEQ-of-collections families + per-method rows) · 136
-  success→errored (Header constants refused, UBI arith, AvlTree degenerate
-  flags, Global.serialize Box) · 73 errored→success (numeric-method overflow
-  paths accept where the JVM rejects) · 11 panicked (10 ×
-  `ergo_avltree_rust 0.1.1` on malformed proofs/value-length asserts, 1 ×
-  `i64::MIN / -1` divide overflow) · 5 value (tuple-register Coll[Byte]
-  zeroed ×2, length 133v135 ×1, decodePoint off-curve/zero-lead ×2) · 3
-  not-implemented (substConstants). All candidate impl findings — surfaced,
-  not yet routed upstream.
-- **Wire tier: live.** First standing: **210 nice / 3 coal / 213 entries**.
-  The 3 coals share one root cause — re-encoding deeply-nested collection
-  types, ergo-ser's type writer emits the compressed nested-Coll prefix
-  (`0x18…`) where the JVM canonical form is the general `0x0c 0x0c…`
-  encoding (Constant.json coll_62/63/69). Patch-free: pure
-  `read_*`/`write_*` round-trips through the node's own codecs.
+- **Eval tier: live.** Standing at arkadianet `fa97cfc` (self-compare,
+  2026-06-10): **2291 nice / 5 coal / 2296 entries** — up from 1874/2288 at
+  `08ee11ef` after arkadianet's 36-commit conformance round (the avltree
+  panic surface is now guarded node-side: outcomes grade nice; the upstream
+  crate still panics internally, caught and mapped). The 5 residuals are
+  reject-arm shaped: Int+Long ArithOp coercion (JVM coerces → Long,
+  arkadianet errors) · Tuple.checkType_unsupported ×2 and
+  Rule1012_header_size_bit / Rule1019_check_v6_type (JVM rejects, arkadianet
+  accepts — the rule entries may be enforced at arkadianet's validation
+  layer, which vixen's direct read_ergo_tree→eval path bypasses; layering
+  question, not yet routed).
+- **Wire tier: live.** Standing at `fa97cfc`: **213 / 213 clean** (the
+  nested-Coll type-prefix divergence fixed upstream; was 210/213).
 - **Transaction tier: not built yet.** Patch-free
   (`ergo-validation::validate_transaction` over a synthetic UtxoView +
   `ergo-rest-json` decode). Block tier once SANTA's contract for it lands.
