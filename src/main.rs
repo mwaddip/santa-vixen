@@ -104,9 +104,10 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
             let input = entry.get("input").filter(|v| !v.is_null());
             let inputs = entry.get("inputs").and_then(|v| v.as_array());
             let self_registers = entry.get("selfRegisters").and_then(|v| v.as_object());
+            let tree_v = entry["version"]["ergoTree"].as_u64().unwrap_or(0) as u8;
             let act_v = entry["version"]["activated"].as_u64().unwrap_or(0) as u8;
             let actual = caught_actual(std::panic::AssertUnwindSafe(|| {
-                eval::run_entry(&tree_bytes, input, inputs, self_registers, act_v).to_json()
+                eval::run_entry(&tree_bytes, input, inputs, self_registers, tree_v, act_v).to_json()
             }));
             let expected = entry["expected"].clone();
             (name, actual, expected)

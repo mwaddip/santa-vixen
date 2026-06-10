@@ -199,6 +199,7 @@ pub fn run_entry(
     input: Option<&serde_json::Value>,
     inputs: Option<&Vec<serde_json::Value>>,
     self_registers: Option<&serde_json::Map<String, serde_json::Value>>,
+    tree_version: u8,
     activated_version: u8,
 ) -> Outcome {
     // v4: SELF carries custom non-mandatory registers (decoded first so a
@@ -283,6 +284,11 @@ pub fn run_entry(
         last_headers: &[],
         last_block_utxo_root: Some(avl_dummy),
         activated_script_version: activated_version,
+        // The entry's declared version.ergoTree (contract §3: version is an
+        // input — the (activated, ergoTree) pair). Distinct from activated:
+        // a legacy tree can be spent under a newer activation, and the impl
+        // keys several v6 behaviors on the TREE version.
+        ergo_tree_version: tree_version,
     };
 
     let mut cost = CostAccumulator::recording_only();
