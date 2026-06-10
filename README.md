@@ -60,9 +60,23 @@ runner shows ⚠️ could-not-build in the grid until the patch is rebased
   question, not yet routed).
 - **Wire tier: live.** Standing at `fa97cfc`: **213 / 213 clean** (the
   nested-Coll type-prefix divergence fixed upstream; was 210/213).
+- **Block tier: live** (`santa-block/v1`, patch-free). First standing at
+  arkadianet `fa97cfc`: **7 / 9** — both non-PoW captured blocks fully exact
+  (valid + post_digest + cost), all 5 PoW/section/cost mutations reject at
+  the right gate. The 2 coals are findings: `version-gate` accepted (no
+  `exBlockVersion` params-blockVersion-vs-header check in arkadianet's
+  block path) and `deserialize-context-111927` cost 169202 vs blessed
+  170876 (digest byte-exact; the deserialize-substitution presence-charge
+  class again, now at block scope). Wiring mirrors the node's own
+  digest-mode flow (`process_block_digest`) re-composed from public seams —
+  PoW vs own nBits → proofs-section binding → `build_utxo_changes_raw` →
+  `DigestProofVerifier::apply_block_resolving_boxes` anchored at
+  `parent_digest` → `DigestUtxoView` →
+  `validate_full_block_parallel_with_costs`, checkpoint-free, per-entry
+  fresh.
 - **Transaction tier: not built yet.** Patch-free
   (`ergo-validation::validate_transaction` over a synthetic UtxoView +
-  `ergo-rest-json` decode). Block tier once SANTA's contract for it lands.
+  `ergo-rest-json` decode).
 
 ## Standalone dev
 
