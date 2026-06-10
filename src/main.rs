@@ -13,6 +13,7 @@
 //!                                          comparison — the orchestrator owns
 //!                                          the §5 comparator.
 
+mod block;
 mod eval;
 mod sval;
 mod wire;
@@ -63,6 +64,18 @@ fn caught_actual<F: FnOnce() -> J + std::panic::UnwindSafe>(f: F) -> J {
     }
 }
 
+/// The same never-panic net for block entries — the panic shape carries
+/// `valid`/`post_digest` (santa-block actuals), not eval's `value`.
+fn caught_actual_block<F: FnOnce() -> J + std::panic::UnwindSafe>(f: F) -> J {
+    match std::panic::catch_unwind(f) {
+        Ok(j) => j,
+        Err(p) => {
+            let note = panic_note(p);
+            block::BlockOutcome::Panicked { note: format!("panic: {note}") }.to_json()
+        }
+    }
+}
+
 /// Evaluate every entry of one vector file (blind), pairing each entry's
 /// `name` with its actual JSON and the vector's blessed `expected` JSON.
 /// Returns empty for a non-eval vector (wire/transaction — not wired yet).
@@ -75,7 +88,8 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
     let schema = vector["schema"].as_str().unwrap_or("");
     let is_eval = schema.starts_with("santa-eval/");
     let is_wire = schema.starts_with("santa-wire/");
-    if !is_eval && !is_wire {
+    let is_block = schema.starts_with("santa-block/");
+    if !is_eval && !is_wire && !is_block {
         return Vec::new();
     }
     let entries = match vector["entries"].as_array() {
@@ -95,6 +109,22 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                     wire::run_entry(kind, bytes_hex).to_json()
                 }));
                 let expected = serde_json::json!({"bytes_hex": bytes_hex, "error": J::Null});
+                return (name, actual, expected);
+            }
+            if is_block {
+                let actual = caught_actual_block(std::panic::AssertUnwindSafe(|| {
+                    block::run_entry(entry).to_json()
+                }));
+                // Blessed expected in the actuals vocabulary; `reason` is
+                // diagnostic-only (never graded) — self-compare strips it
+                // from both sides so a clean reject isn't coal'd on the
+                // reject-string differing.
+                let expected = serde_json::json!({
+                    "valid": entry["expected"]["valid"],
+                    "post_digest": entry["expected"]["post_digest"],
+                    "cost": entry["expected"]["cost"],
+                    "error": J::Null,
+                });
                 return (name, actual, expected);
             }
             let tree_hex = entry["tree_bytes_hex"]
@@ -135,7 +165,14 @@ fn self_compare(paths: &[String]) {
         let short = f.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
         for (name, actual, expected) in run_vector_file(f) {
             total += 1;
-            if actual == expected {
+            // `reason` is diagnostic-only (block/tx tiers) — never graded;
+            // strip it for the equality so a clean reject isn't coal'd on
+            // its reject-string. Emit mode still writes it (schema field).
+            let mut actual_cmp = actual.clone();
+            if let Some(o) = actual_cmp.as_object_mut() {
+                o.remove("reason");
+            }
+            if actual_cmp == expected {
                 nice += 1;
             } else {
                 coal += 1;
