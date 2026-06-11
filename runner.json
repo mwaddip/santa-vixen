@@ -2,7 +2,7 @@
   "name": "vixen-avltree-fork",
   "label": "vixen (arkadianet/ergo · avltree fork)",
   "version": "v6",
-  "tiers": ["eval", "wire", "block"],
+  "tiers": ["eval", "wire", "block", "chain"],
   "cost": true,
   "impl": "https://github.com/arkadianet/ergo.git#main"
 }
