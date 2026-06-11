@@ -14,6 +14,7 @@
 //!                                          the §5 comparator.
 
 mod block;
+mod chain;
 mod eval;
 mod sval;
 mod wire;
@@ -76,6 +77,17 @@ fn caught_actual_block<F: FnOnce() -> J + std::panic::UnwindSafe>(f: F) -> J {
     }
 }
 
+/// The chain-shaped never-panic net (santa-chain panic envelope).
+fn caught_actual_chain<F: FnOnce() -> J + std::panic::UnwindSafe>(f: F) -> J {
+    match std::panic::catch_unwind(f) {
+        Ok(j) => j,
+        Err(p) => {
+            let note = panic_note(p);
+            chain::ChainOutcome::Panicked { note: format!("panic: {note}") }.to_json()
+        }
+    }
+}
+
 /// Evaluate every entry of one vector file (blind), pairing each entry's
 /// `name` with its actual JSON and the vector's blessed `expected` JSON.
 /// Returns empty for a non-eval vector (wire/transaction — not wired yet).
@@ -89,7 +101,8 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
     let is_eval = schema.starts_with("santa-eval/");
     let is_wire = schema.starts_with("santa-wire/");
     let is_block = schema.starts_with("santa-block/");
-    if !is_eval && !is_wire && !is_block {
+    let is_chain = schema.starts_with("santa-chain/");
+    if !is_eval && !is_wire && !is_block && !is_chain {
         return Vec::new();
     }
     let entries = match vector["entries"].as_array() {
@@ -109,6 +122,24 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                     wire::run_entry(kind, bytes_hex).to_json()
                 }));
                 let expected = serde_json::json!({"bytes_hex": bytes_hex, "error": J::Null});
+                return (name, actual, expected);
+            }
+            if is_chain {
+                let actual = caught_actual_chain(std::panic::AssertUnwindSafe(|| {
+                    chain::run_entry(entry).to_json()
+                }));
+                // Per-kind expected in the actuals vocabulary (value-only
+                // tier; `diagnostic` never read).
+                let expected = match entry["kind"].as_str().unwrap_or("") {
+                    "retargeting" => serde_json::json!({
+                        "nbits": entry["expected"]["nbits"], "error": J::Null,
+                    }),
+                    _ => serde_json::json!({
+                        "parameters": entry["expected"]["parameters"],
+                        "activated_update": entry["expected"]["activated_update"],
+                        "error": J::Null,
+                    }),
+                };
                 return (name, actual, expected);
             }
             if is_block {

@@ -84,7 +84,9 @@ impl BlockOutcome {
 /// carries only the wire-bearing fields; `ScalaHeader`'s derived/cosmetic
 /// fields (`extensionId`, `difficulty`, `size`, section ids) are
 /// backfilled with defaults — `decode_scala_header` never reads them.
-fn decode_header_json(h: &J) -> Result<(Vec<u8>, [u8; 32], ergo_ser::header::Header), String> {
+pub(crate) fn decode_header_json(
+    h: &J,
+) -> Result<(Vec<u8>, [u8; 32], ergo_ser::header::Header), String> {
     let s = |k: &str| -> Result<String, String> {
         h[k].as_str().map(str::to_string).ok_or_else(|| format!("header.{k} missing"))
     };
@@ -137,7 +139,9 @@ fn context_checked_header(h: &J) -> Result<CheckedHeader, String> {
 /// per-epoch parameter set. Named ids fill their fields (defaults from
 /// the testnet launch set for ids the table omits); unrecognized ids ride
 /// in `extra` verbatim.
-fn params_from_table(table: &serde_json::Map<String, J>) -> Result<ActiveProtocolParameters, String> {
+pub(crate) fn params_from_table(
+    table: &serde_json::Map<String, J>,
+) -> Result<ActiveProtocolParameters, String> {
     let mut p: ActiveProtocolParameters = scala_launch_testnet();
     p.epoch_start_height = 0;
     p.subblocks_per_block = None;

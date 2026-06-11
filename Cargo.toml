@@ -24,6 +24,10 @@ ergo-validation = { path = "../ergo/ergo-validation", features = ["test-helpers"
 # build_utxo_changes_raw) and the node-API JSON decoders.
 ergo-state = { path = "../ergo/ergo-state" }
 ergo-rest-json = { path = "../ergo/ergo-rest-json" }
+# Chain tier: retargeting (next_n_bits + DifficultyParams) — voting rides
+# ergo-validation's compute_epoch_votes / compute_next_params.
+ergo-crypto = { path = "../ergo/ergo-crypto" }
+ergo-chain-spec = { path = "../ergo/ergo-chain-spec" }
 serde_json = "1"
 # Pinned to the same majors as arkadianet's workspace — these types appear in
 # its public API surface (ReductionContext.extension / SigmaValue::BigInt).
