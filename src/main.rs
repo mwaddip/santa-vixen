@@ -129,16 +129,27 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                     chain::run_entry(entry).to_json()
                 }));
                 // Per-kind expected in the actuals vocabulary (value-only
-                // tier; `diagnostic` never read).
-                let expected = match entry["kind"].as_str().unwrap_or("") {
-                    "retargeting" => serde_json::json!({
-                        "nbits": entry["expected"]["nbits"], "error": J::Null,
-                    }),
-                    _ => serde_json::json!({
-                        "parameters": entry["expected"]["parameters"],
-                        "activated_update": entry["expected"]["activated_update"],
-                        "error": J::Null,
-                    }),
+                // tier; `diagnostic` never read). The voting reject arm
+                // (contract amendment @ santa 7f564b8) blesses
+                // expected.error == "errored" — inputs the JVM throws on.
+                let expected = if entry["expected"]["error"] == "errored" {
+                    // Match the runner's union errored envelope (note is
+                    // stripped by the self-compare normalize, like reason).
+                    serde_json::json!({
+                        "nbits": J::Null, "parameters": J::Null,
+                        "activated_update": J::Null, "error": "errored",
+                    })
+                } else {
+                    match entry["kind"].as_str().unwrap_or("") {
+                        "retargeting" => serde_json::json!({
+                            "nbits": entry["expected"]["nbits"], "error": J::Null,
+                        }),
+                        _ => serde_json::json!({
+                            "parameters": entry["expected"]["parameters"],
+                            "activated_update": entry["expected"]["activated_update"],
+                            "error": J::Null,
+                        }),
+                    }
                 };
                 return (name, actual, expected);
             }
@@ -196,12 +207,14 @@ fn self_compare(paths: &[String]) {
         let short = f.file_name().and_then(|s| s.to_str()).unwrap_or("?").to_string();
         for (name, actual, expected) in run_vector_file(f) {
             total += 1;
-            // `reason` is diagnostic-only (block/tx tiers) — never graded;
-            // strip it for the equality so a clean reject isn't coal'd on
-            // its reject-string. Emit mode still writes it (schema field).
+            // `reason` (block/tx) and `note` (chain errored) are
+            // diagnostic-only — never graded; strip both for the equality
+            // so a clean reject isn't coal'd on its diagnostic string.
+            // Emit mode still writes them (schema fields).
             let mut actual_cmp = actual.clone();
             if let Some(o) = actual_cmp.as_object_mut() {
                 o.remove("reason");
+                o.remove("note");
             }
             if actual_cmp == expected {
                 nice += 1;

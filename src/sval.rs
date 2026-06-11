@@ -384,6 +384,17 @@ pub fn decode_constant(j: &J) -> Result<(SigmaType, SigmaValue), BridgeError> {
         // The impl has no SHeader value carrier; read_value(SHeader) refuses
         // — the library's own verdict on blessed input material ⇒ errored.
         "Header" => read_value_bytes(SigmaType::SHeader, &hex_field("bytes_hex")?)?,
+        // Compact byte-collection input form (runner-contract §2):
+        // semantically identical to Coll/SByte/items — input-side only
+        // (results still encode as plain Coll). Bytes are signed on the
+        // value layer; the wire carrier is the same Bytes specialization.
+        "Coll[Byte]" => {
+            let bytes = hex_field("value_hex")?;
+            (
+                SigmaType::SColl(Box::new(SigmaType::SByte)),
+                SigmaValue::Coll(CollValue::Bytes(bytes)),
+            )
+        }
         "Coll" => {
             let elem = decode_stype(&j["elem"])?;
             let items_json = j["items"]
