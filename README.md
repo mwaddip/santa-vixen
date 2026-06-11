@@ -71,19 +71,22 @@ Net: 1874→1877 nice. Wire unaffected.
 ## Status
 
 - **Eval tier: live.** Standing at arkadianet `fa97cfc` (self-compare,
-  2026-06-11): **2321 nice / 19 coal / 2340 entries** — the giant leap from
+  2026-06-12): **2325 nice / 21 coal / 2346 entries** — the giant leap from
   1874/2288 at `08ee11ef` came from arkadianet's 36-commit conformance
   round (incl. node-side guards on the avltree panic surface: outcomes
   grade nice; the upstream crate still panics internally, caught and
-  mapped). The 19 residuals across 10 files are reject-arm shaped: the 5
-  longstanding (Int+Long ArithOp coercion · Tuple.checkType_unsupported ×2
-  · Rule1012_header_size_bit / Rule1019_check_v6_type — the rule pair may
-  be enforced at arkadianet's validation layer, which vixen's direct
-  read_ergo_tree→eval path bypasses; layering question) plus 14 from
-  santa's fresh authored families (GroupElement.canonical_bytes ×4,
-  Global.deserializeTo_Header_id_basis ×3, FuncValue.non_unary_arity ×3,
-  atLeast.children_cap ×2, Box.eq_id_basis, Box.bytes_byte_basis) — all
-  candidate findings, not yet routed.
+  mapped). Input decode now carries the compact `Coll[Byte]`/`value_hex`
+  form (santa `4e27b84`; semantically identical to per-item `Coll/SByte`,
+  35× smaller on big payloads). The 21 residuals are reject-arm shaped: the
+  5 longstanding (Int+Long ArithOp coercion · Tuple.checkType_unsupported
+  ×2 · Rule1012/1019 — the rule pair may be enforced at arkadianet's
+  validation layer, which vixen's direct read_ergo_tree→eval path bypasses)
+  plus authored-family candidate findings (GroupElement.canonical_bytes,
+  Global.deserializeTo_Header_id_basis, FuncValue.non_unary_arity,
+  atLeast.children_cap, Box basis probes) plus 2 in the new SBox
+  token-window family (`destobox-124`/`fat-then-reg`: arkadianet accepts
+  values 124/2 where the JVM eval-errors — its box-candidate parse lacks
+  the JVM's 4096-byte window / rule-1014 gate). Not yet routed.
 - **Wire tier: live.** Standing at `fa97cfc`: **213 / 213 clean** (the
   nested-Coll type-prefix divergence fixed upstream; was 210/213).
 - **Block tier: live** (`santa-block/v1`, patch-free). Standing at
