@@ -1,5 +1,5 @@
 //! Chain-tier wiring: header-chain-decidable consensus functions per
-//! `runner-contract-chain.md` — kind dispatch per entry, two kinds:
+//! `runner-contract-chain.md` — kind dispatch per entry, four kinds:
 //!
 //! - **retargeting** — anchor headers → required `nBits` for a target
 //!   height, via `ergo_crypto::difficulty::next_n_bits` (the same fn the
@@ -8,6 +8,14 @@
 //!   update → the full next-Parameters table + the activated update, via
 //!   `compute_epoch_votes` (the seeded tally) + `compute_next_params`
 //!   (the boundary pair function).
+//! - **fork_vote_gate** — the per-header rule-407 prohibition, via
+//!   `ergo_validation::block::validate_fork_vote` against a `SoftForkState`
+//!   built from the entry's table exactly as the node's block path builds
+//!   it (present iff both 121 and 122 are in the table).
+//! - **header_votes** — per-header vote validity (rules 213/214), via the
+//!   exact `check_votes_*` pair `validate_header_after_pow` runs. (Stateless
+//!   byte checks; arkadianet implements no rule 212, so the 3-non-120 case
+//!   surfaces as a finding, not a runner gap.)
 //!
 //! §5 self-containment: every value the computation reads comes from
 //! `entry.settings` / `entry.payload` — `DifficultyParams` and
@@ -19,8 +27,13 @@
 
 use ergo_chain_spec::DifficultyParams;
 use ergo_crypto::difficulty::next_n_bits;
+use ergo_primitives::digest::{ADDigest, Digest32, ModifierId};
+use ergo_primitives::group_element::GroupElement;
+use ergo_ser::autolykos::AutolykosSolution;
 use ergo_ser::difficulty::decode_compact_bits;
 use ergo_ser::header::Header;
+use ergo_validation::block::{validate_fork_vote, SoftForkState};
+use ergo_validation::header::{check_votes_no_contradictions, check_votes_no_duplicates};
 use ergo_validation::voting::{compute_epoch_votes, compute_next_params, VotingSettings};
 use ergo_validation::{
     ChainHeaderReader, ChainHeaderReaderError, ErgoValidationSettingsUpdate, HeaderView,
@@ -30,11 +43,61 @@ use serde_json::Value as J;
 use crate::block::{decode_header_json, params_from_table};
 use crate::sval;
 
+/// Read a `u32` envelope/payload field, erroring if absent or out of range.
+fn u32_field(j: &J, what: &str) -> Result<u32, String> {
+    j.as_u64()
+        .and_then(|v| u32::try_from(v).ok())
+        .ok_or_else(|| format!("{what} missing or out of range"))
+}
+
+/// Build the per-entry `VotingSettings` (shared by voting + fork_vote_gate)
+/// — §5: every field from the entry, nothing from a network preset.
+fn voting_settings_from(settings: &J) -> Result<VotingSettings, String> {
+    Ok(VotingSettings {
+        voting_length: u32_field(&settings["voting_length"], "settings.voting_length")?,
+        soft_fork_epochs: u32_field(&settings["soft_fork_epochs"], "settings.soft_fork_epochs")?,
+        activation_epochs: u32_field(&settings["activation_epochs"], "settings.activation_epochs")?,
+        version2_activation: match &settings["version2_activation_height"] {
+            J::Null => None,
+            v => Some(u32_field(v, "settings.version2_activation_height")?),
+        },
+    })
+}
+
+/// A header carrying only the fields the vote / fork-vote checks read
+/// (`votes`, `height`); every other field is zeroed. The checks never
+/// touch the rest (`check_votes_*` read `votes`; `validate_fork_vote`
+/// reads `votes` + `height`), so this is faithful — the same functions
+/// the node runs at header acceptance, without synthesizing an unread PoW
+/// solution or section roots.
+fn dummy_header(height: u32, votes: [u8; 3]) -> Header {
+    Header {
+        version: 2,
+        parent_id: ModifierId::from_bytes([0u8; 32]),
+        ad_proofs_root: Digest32::from_bytes([0u8; 32]),
+        transactions_root: Digest32::from_bytes([0u8; 32]),
+        state_root: ADDigest::from_bytes([0u8; 33]),
+        timestamp: 0,
+        extension_root: Digest32::from_bytes([0u8; 32]),
+        n_bits: 0,
+        height,
+        votes,
+        unparsed_bytes: Vec::new(),
+        solution: AutolykosSolution::V2 {
+            pk: GroupElement::from_bytes([0u8; 33]),
+            nonce: [0u8; 8],
+        },
+    }
+}
+
 /// One chain entry's outcome (contract §3). The union actuals shape is
 /// legal (the other kind's value keys null); we emit per-kind fields.
 pub enum ChainOutcome {
     Retargeted { nbits: u32 },
     Voted { table: serde_json::Map<String, J>, activated_update: String },
+    /// A pass/fail verdict for the per-header kinds (fork_vote_gate,
+    /// header_votes). Two-outcome — these checks return Ok/Err, never throw.
+    Validity { valid: bool },
     Errored { note: String },
     NotImplemented,
     Panicked { note: String },
@@ -51,17 +114,20 @@ impl ChainOutcome {
                 "activated_update": activated_update,
                 "error": null,
             }),
+            ChainOutcome::Validity { valid } => serde_json::json!({
+                "valid": valid, "error": null,
+            }),
             ChainOutcome::Errored { note } => serde_json::json!({
-                "nbits": null, "parameters": null, "activated_update": null,
-                "error": "errored", "note": note,
+                "valid": null, "nbits": null, "parameters": null,
+                "activated_update": null, "error": "errored", "note": note,
             }),
             ChainOutcome::NotImplemented => serde_json::json!({
-                "nbits": null, "parameters": null, "activated_update": null,
-                "error": "not-implemented",
+                "valid": null, "nbits": null, "parameters": null,
+                "activated_update": null, "error": "not-implemented",
             }),
             ChainOutcome::Panicked { note } => serde_json::json!({
-                "nbits": null, "parameters": null, "activated_update": null,
-                "error": "panicked", "note": note,
+                "valid": null, "nbits": null, "parameters": null,
+                "activated_update": null, "error": "panicked", "note": note,
             }),
         }
     }
@@ -186,15 +252,7 @@ fn run_voting(settings: &J, payload: &J) -> Result<ChainOutcome, String> {
             .ok_or_else(|| format!("{what} missing or out of range"))
     };
 
-    let voting_settings = VotingSettings {
-        voting_length: u32_of(&settings["voting_length"], "settings.voting_length")?,
-        soft_fork_epochs: u32_of(&settings["soft_fork_epochs"], "settings.soft_fork_epochs")?,
-        activation_epochs: u32_of(&settings["activation_epochs"], "settings.activation_epochs")?,
-        version2_activation: match &settings["version2_activation_height"] {
-            J::Null => None,
-            v => Some(u32_of(v, "settings.version2_activation_height")?),
-        },
-    };
+    let voting_settings = voting_settings_from(settings)?;
 
     let boundary_height = u32_of(&payload["boundary_height"], "payload.boundary_height")?;
     let cur_table = payload["current_parameters"]["table"]
@@ -249,6 +307,69 @@ fn run_voting(settings: &J, payload: &J) -> Result<ChainOutcome, String> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// header_votes (rules 212/213/214 — stateless byte checks)
+// ---------------------------------------------------------------------------
+
+fn run_header_votes(payload: &J) -> Result<ChainOutcome, String> {
+    let votes = votes3(
+        payload["votes"].as_str().ok_or("payload.votes missing")?,
+        "payload.votes",
+    )?;
+    let header = dummy_header(0, votes);
+    // The exact vote-validation set `validate_header_after_pow` runs at
+    // header acceptance: rule 213 then 214. Two-outcome — pure byte checks
+    // can't throw, so there is no errored arm. (arkadianet implements no
+    // rule 212 (≤2 non-120 votes) and no lone-0x80 self-negation catch in
+    // 214 — those cases pass here where the JVM rejects: real findings, the
+    // node's actual behavior, not a runner gap.)
+    let valid = check_votes_no_duplicates(&header).is_ok()
+        && check_votes_no_contradictions(&header).is_ok();
+    Ok(ChainOutcome::Validity { valid })
+}
+
+// ---------------------------------------------------------------------------
+// fork_vote_gate (rule 407 — per-header fork-vote prohibition)
+// ---------------------------------------------------------------------------
+
+fn run_fork_vote_gate(settings: &J, payload: &J) -> Result<ChainOutcome, String> {
+    let vs = voting_settings_from(settings)?;
+    let height = u32_field(&payload["height"], "payload.height")?;
+    let votes = votes3(
+        payload["header_votes"].as_str().ok_or("payload.header_votes missing")?,
+        "payload.header_votes",
+    )?;
+    let table = payload["current_parameters"]["table"]
+        .as_object()
+        .ok_or("payload.current_parameters.table missing")?;
+    let active = params_from_table(table)?;
+
+    // Mirror the node's `SoftForkState` construction (ergo-sync block path):
+    // present iff BOTH 122 (starting_height) and 121 (votes_collected) are
+    // in the table, via arkadianet's own accessors. The JVM's eager
+    // `softForkVotesCollected.get` throws on a 122-without-121 table;
+    // arkadianet falls to `None` → the gate passes (a surfaced leniency —
+    // the node's real behavior, not synthesized here).
+    let state = match (
+        active.soft_fork_starting_height(),
+        active.soft_fork_votes_collected(),
+    ) {
+        (Some(sh), Some(vc)) if sh >= 0 => Some(SoftForkState {
+            starting_height: sh as u32,
+            votes_collected: vc,
+            voting_length: vs.voting_length,
+            soft_fork_epochs: vs.soft_fork_epochs,
+            activation_epochs: vs.activation_epochs,
+            approved: vs.soft_fork_approved(vc),
+        }),
+        _ => None,
+    };
+
+    let header = dummy_header(height, votes);
+    let valid = validate_fork_vote(&header, state.as_ref()).is_ok();
+    Ok(ChainOutcome::Validity { valid })
+}
+
 /// Run one chain entry: kind dispatch; decode failures land `errored`;
 /// an unknown kind is `not-implemented` (per-kind ledger state).
 pub fn run_entry(entry: &J) -> ChainOutcome {
@@ -256,6 +377,8 @@ pub fn run_entry(entry: &J) -> ChainOutcome {
     let result = match kind {
         "retargeting" => run_retargeting(&entry["settings"], &entry["payload"]),
         "voting" => run_voting(&entry["settings"], &entry["payload"]),
+        "header_votes" => run_header_votes(&entry["payload"]),
+        "fork_vote_gate" => run_fork_vote_gate(&entry["settings"], &entry["payload"]),
         _ => return ChainOutcome::NotImplemented,
     };
     match result {

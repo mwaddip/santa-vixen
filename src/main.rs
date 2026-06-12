@@ -136,7 +136,7 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                     // Match the runner's union errored envelope (note is
                     // stripped by the self-compare normalize, like reason).
                     serde_json::json!({
-                        "nbits": J::Null, "parameters": J::Null,
+                        "valid": J::Null, "nbits": J::Null, "parameters": J::Null,
                         "activated_update": J::Null, "error": "errored",
                     })
                 } else {
@@ -144,10 +144,14 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                         "retargeting" => serde_json::json!({
                             "nbits": entry["expected"]["nbits"], "error": J::Null,
                         }),
-                        _ => serde_json::json!({
+                        "voting" => serde_json::json!({
                             "parameters": entry["expected"]["parameters"],
                             "activated_update": entry["expected"]["activated_update"],
                             "error": J::Null,
+                        }),
+                        // header_votes / fork_vote_gate — the `valid` verdict.
+                        _ => serde_json::json!({
+                            "valid": entry["expected"]["valid"], "error": J::Null,
                         }),
                     }
                 };
