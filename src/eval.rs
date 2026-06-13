@@ -199,6 +199,7 @@ pub fn run_entry(
     input: Option<&serde_json::Value>,
     inputs: Option<&Vec<serde_json::Value>>,
     self_registers: Option<&serde_json::Map<String, serde_json::Value>>,
+    self_extension: Option<&serde_json::Map<String, serde_json::Value>>,
     tree_version: u8,
     activated_version: u8,
 ) -> Outcome {
@@ -220,6 +221,32 @@ pub fn run_entry(
                 extension.insert(1u8, tv);
             }
             Err(e) => return decode_failure_outcome(e, "input decode"),
+        }
+    }
+
+    // v5: the SELF box's TOP-LEVEL ContextExtension, carried verbatim as
+    // {varId 0..255: SValue}. Keys ≥0x80 are left IN PLACE — the harness
+    // does NOT pre-judge the key domain; vixen's own context/eval decides,
+    // so the signed-Byte key-domain divergence surfaces honestly (a ≥0x80
+    // key crashes the JVM's signed-array context build → errored;
+    // arkadianet's IndexMap<u8,..> accepts it → the finding). Per-input
+    // (getVarFromInput) path is left untouched.
+    if let Some(map) = self_extension {
+        for (k, v) in map {
+            let id: u8 = match k.parse() {
+                Ok(id) => id,
+                Err(_) => {
+                    return Outcome::Panicked {
+                        note: format!("v5 extension: bad var id {k:?}"),
+                    }
+                }
+            };
+            match sval::decode_constant(v) {
+                Ok(tv) => {
+                    extension.insert(id, tv);
+                }
+                Err(e) => return decode_failure_outcome(e, "v5 extension decode"),
+            }
         }
     }
 
