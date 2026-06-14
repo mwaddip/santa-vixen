@@ -1,1 +1,4 @@
 /target
+# Local-only session handoff (working scaffolding — never commit; findings
+# in prose don't belong in the public repo).
+/HANDOFF.md
