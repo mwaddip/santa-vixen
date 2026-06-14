@@ -173,6 +173,21 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                 });
                 return (name, actual, expected);
             }
+            // santa-eval/v6-fullctx: the entry carries a full `context`
+            // object (self_index, inputs, data_inputs, outputs, headers,
+            // pre_header_hex, height, extension, input_extensions — boxes/
+            // headers as hex) instead of the v2/v3/v4/v5 top-level
+            // input/inputs/selfRegisters/extension fields. vixen has no
+            // full-context arm yet, so emit a faithful `not-implemented`
+            // (a coverage ledger state) — checked BEFORE the eval
+            // field-reads so these entries don't fall through to the bare
+            // v1 closed-tree path (empty context → wrong value → false
+            // red). A real full-context arm can land later.
+            if entry.get("context").is_some_and(|c| c.is_object()) {
+                let actual = eval::Outcome::NotImplemented.to_json();
+                let expected = entry["expected"].clone();
+                return (name, actual, expected);
+            }
             let tree_hex = entry["tree_bytes_hex"]
                 .as_str()
                 .expect("entry missing tree_bytes_hex");
