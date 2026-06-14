@@ -173,18 +173,24 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                 });
                 return (name, actual, expected);
             }
-            // santa-eval/v6-fullctx: the entry carries a full `context`
-            // object (self_index, inputs, data_inputs, outputs, headers,
+            // santa-eval/v6-fullctx: the entry carries a full reconstructed
+            // `context` (self_index, inputs, data_inputs, outputs, headers,
             // pre_header_hex, height, extension, input_extensions — boxes/
             // headers as hex) instead of the v2/v3/v4/v5 top-level
-            // input/inputs/selfRegisters/extension fields. vixen has no
-            // full-context arm yet, so emit a faithful `not-implemented`
-            // (a coverage ledger state) — checked BEFORE the eval
-            // field-reads so these entries don't fall through to the bare
-            // v1 closed-tree path (empty context → wrong value → false
-            // red). A real full-context arm can land later.
-            if entry.get("context").is_some_and(|c| c.is_object()) {
-                let actual = eval::Outcome::NotImplemented.to_json();
+            // input/inputs/selfRegisters/extension fields. Decode it and
+            // evaluate the tree against the REAL context (mirrors the blesser's
+            // EvalCore.evalFullContext); runner-side, no patch. Checked BEFORE
+            // the v2–v5 field-reads so these don't fall through to the bare v1
+            // closed-tree path (empty context → wrong value → false red).
+            if let Some(context) = entry.get("context").filter(|c| c.is_object()) {
+                let tree_hex = entry["tree_bytes_hex"]
+                    .as_str()
+                    .expect("v6-fullctx entry missing tree_bytes_hex");
+                let tree_bytes = sval::hex_decode(tree_hex).expect("bad tree_bytes_hex");
+                let act_v = entry["version"]["activated"].as_u64().unwrap_or(0) as u8;
+                let actual = caught_actual(std::panic::AssertUnwindSafe(|| {
+                    eval::run_entry_fullctx(&tree_bytes, context, act_v).to_json()
+                }));
                 let expected = entry["expected"].clone();
                 return (name, actual, expected);
             }

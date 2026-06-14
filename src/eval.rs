@@ -9,16 +9,17 @@
 //! the runner adds nothing — whatever the impl does is what gets graded.
 
 use ergo_primitives::cost::CostAccumulator;
-use ergo_primitives::digest::ModifierId;
+use ergo_primitives::digest::{blake2b256, ModifierId};
 use ergo_primitives::reader::VlqReader;
 use ergo_primitives::writer::VlqWriter;
-use ergo_ser::ergo_box::ErgoBoxCandidate;
+use ergo_ser::ergo_box::{read_ergo_box, ErgoBoxCandidate};
 use ergo_ser::ergo_tree::read_ergo_tree;
+use ergo_ser::header::read_header;
 use ergo_ser::register::{AdditionalRegisters, RegisterValue};
 use ergo_ser::sigma_type::SigmaType;
 use ergo_ser::sigma_value::{AvlTreeData, SigmaValue};
-use ergo_sigma::evaluator::{conformance, EvalBox, EvalError, ReductionContext};
-use ergo_validation::test_helpers::candidate_to_eval_box;
+use ergo_sigma::evaluator::{conformance, EvalBox, EvalError, EvalHeader, ReductionContext};
+use ergo_validation::test_helpers::{candidate_to_eval_box, ergo_box_to_eval_box};
 use indexmap::IndexMap;
 
 use crate::sval;
@@ -326,6 +327,326 @@ pub fn run_entry(
                 inputs: tx_inputs,
                 outputs: &[],
                 data_inputs: &[],
+            };
+            match sval::encode_value(&v, &env) {
+                Ok(value) => Outcome::Success { value, cost: cost.total().value() },
+                Err(e) => Outcome::Panicked { note: format!("result encode: {e:?}") },
+            }
+        }
+        Err(e) => eval_failure_outcome(e),
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// santa-eval/v6-fullctx — the real reconstructed spending context.
+//
+// Mirrors the blesser's `EvalCore.evalFullContext` (jvm-blesser): decode the
+// per-entry `context` envelope (boxes/headers/pre-header as hex) and evaluate
+// the tree against the REAL INPUTS / OUTPUTS / dataInputs / HEIGHT / headers /
+// preHeader / extension — instead of the single-SELF dummy pin of v1–v5.
+// Runner-side, NO patch: every seam is one of arkadianet's own public entries.
+
+/// PreHeader sub-encoding (`PreHeaderCodec` in the blesser) — ergots' OWN wire
+/// contract, NOT a sigma serializer:
+///   version(1) · parentId(32) · timestamp(VLQ-u64) · nBits(VLQ, u32 domain) ·
+///   height(VLQ, u32 domain) · minerPk(33, SEC1) · votes(3).
+/// The VLQ is plain unsigned LEB128 (NOT sigma ZigZag); decoded by hand below so
+/// byte-parity with the blesser is decoupled from arkadianet's VlqReader.
+struct PreHeaderFields {
+    version: u8,
+    parent_id: [u8; 32],
+    timestamp: u64,
+    n_bits: u64,
+    height: u32,
+    miner_pk: [u8; 33],
+    votes: [u8; 3],
+}
+
+/// Read one unsigned-LEB128 value (mirror of `PreHeaderCodec.readVlqU`),
+/// advancing `pos`. A truncated/overflowing VLQ is the runner's own bridge
+/// failure on the SANTA wire → `panicked`.
+fn read_vlq_u(bytes: &[u8], pos: &mut usize) -> Result<u64, Outcome> {
+    let mut result: u64 = 0;
+    let mut shift: u32 = 0;
+    loop {
+        let b = *bytes.get(*pos).ok_or_else(|| Outcome::Panicked {
+            note: format!("pre_header_hex: VLQ truncated at offset {}", *pos),
+        })?;
+        *pos += 1;
+        if shift >= 64 {
+            return Err(Outcome::Panicked {
+                note: "pre_header_hex: VLQ overflows 64 bits".to_string(),
+            });
+        }
+        result |= ((b & 0x7f) as u64) << shift;
+        if b & 0x80 == 0 {
+            return Ok(result);
+        }
+        shift += 7;
+    }
+}
+
+/// Fixed-width raw-slice helper for the pre-header parse.
+fn ph_array<const N: usize>(bytes: &[u8], pos: &mut usize, field: &str) -> Result<[u8; N], Outcome> {
+    let end = *pos + N;
+    let out: [u8; N] = bytes
+        .get(*pos..end)
+        .and_then(|s| s.try_into().ok())
+        .ok_or_else(|| Outcome::Panicked { note: format!("pre_header_hex: {field} truncated") })?;
+    *pos = end;
+    Ok(out)
+}
+
+fn decode_pre_header(bytes: &[u8]) -> Result<PreHeaderFields, Outcome> {
+    let mut pos = 0usize;
+    let version = *bytes.get(pos).ok_or_else(|| Outcome::Panicked {
+        note: "pre_header_hex: empty".to_string(),
+    })?;
+    pos += 1;
+    let parent_id = ph_array::<32>(bytes, &mut pos, "parentId")?;
+    let timestamp = read_vlq_u(bytes, &mut pos)?;
+    let n_bits = read_vlq_u(bytes, &mut pos)?;
+    let height = read_vlq_u(bytes, &mut pos)? as u32;
+    let miner_pk = ph_array::<33>(bytes, &mut pos, "minerPk")?;
+    let votes = ph_array::<3>(bytes, &mut pos, "votes")?;
+    Ok(PreHeaderFields { version, parent_id, timestamp, n_bits, height, miner_pk, votes })
+}
+
+/// Decode one full-box hex (canonical `ErgoBox` serialization — the shape
+/// `EvalCore.parseBox` consumes for inputs, data_inputs AND outputs) into an
+/// `EvalBox`. The impl REFUSING a blessed box is its own parse verdict →
+/// `errored` (a divergence if the JVM accepted it); the eval-box bridge failing
+/// is the runner's own → `panicked`. `index` is only the bridge's error label —
+/// box identity (id/txId/output_index) comes from the box bytes.
+fn decode_eval_box(hex: &str, index: usize, site: &str) -> Result<EvalBox, Outcome> {
+    let bytes = sval::hex_decode(hex)
+        .map_err(|e| Outcome::Panicked { note: format!("{site}: bad hex: {e:?}") })?;
+    let mut r = VlqReader::new(&bytes);
+    let b = read_ergo_box(&mut r).map_err(|_| Outcome::Errored)?;
+    ergo_box_to_eval_box(&b, index)
+        .map_err(|e| Outcome::Panicked { note: format!("{site}: eval-box bridge: {e:?}") })
+}
+
+/// Decode a `context` box array (inputs / data_inputs / outputs) into EvalBoxes.
+fn decode_box_array(context: &serde_json::Value, field: &str) -> Result<Vec<EvalBox>, Outcome> {
+    let arr = context[field].as_array().ok_or_else(|| Outcome::Panicked {
+        note: format!("context.{field}: missing or not an array"),
+    })?;
+    arr.iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let hex = v.as_str().ok_or_else(|| Outcome::Panicked {
+                note: format!("context.{field}[{i}]: not a hex string"),
+            })?;
+            decode_eval_box(hex, i, &format!("context.{field}[{i}]"))
+        })
+        .collect()
+}
+
+/// Decode one canonical header hex → `EvalHeader` (id = blake2b256 of the
+/// header bytes, as the node computes it). Impl refusal on a blessed header →
+/// `errored`.
+fn decode_eval_header(hex: &str, index: usize) -> Result<EvalHeader, Outcome> {
+    let bytes = sval::hex_decode(hex)
+        .map_err(|e| Outcome::Panicked { note: format!("context.headers[{index}]: bad hex: {e:?}") })?;
+    let mut r = VlqReader::new(&bytes);
+    let h = read_header(&mut r).map_err(|_| Outcome::Errored)?;
+    let id = *blake2b256(&bytes).as_bytes();
+    Ok(EvalHeader::from_header(&h, id))
+}
+
+/// Decode a `{varId → SValue}` extension map (per-input, or the legacy SELF
+/// extension). Bad var id → `panicked`; the impl refusing a constant → its
+/// own decode verdict. Keys ≥0x80 are left in place (no key-domain pre-judging,
+/// as in the v5 arm).
+fn decode_extension_map(
+    map: &serde_json::Map<String, serde_json::Value>,
+    site: &str,
+) -> Result<Extension, Outcome> {
+    let mut ext: Extension = IndexMap::new();
+    for (k, v) in map {
+        let id: u8 = k.parse().map_err(|_| Outcome::Panicked {
+            note: format!("{site}: bad var id {k:?}"),
+        })?;
+        match sval::decode_constant(v) {
+            Ok(tv) => {
+                ext.insert(id, tv);
+            }
+            Err(e) => return Err(decode_failure_outcome(e, site)),
+        }
+    }
+    Ok(ext)
+}
+
+/// All owned, decoded context material — built before the borrowing
+/// `ReductionContext` is assembled.
+struct FullCtx {
+    self_index: usize,
+    inputs: Vec<EvalBox>,
+    data_inputs: Vec<EvalBox>,
+    outputs: Vec<EvalBox>,
+    headers: Vec<EvalHeader>,
+    input_extensions: Vec<Extension>,
+    /// The SELF input's extension (= `input_extensions[self_index]`), which the
+    /// blesser also uses as the top-level `context.extension` (bare getVar).
+    extension: Extension,
+    pre_header: PreHeaderFields,
+}
+
+/// Decode the whole `context` envelope into owned [`FullCtx`] material.
+fn build_fullctx(context: &serde_json::Value) -> Result<FullCtx, Outcome> {
+    let self_index = context["self_index"].as_u64().ok_or_else(|| Outcome::Panicked {
+        note: "context.self_index: missing or not an integer".to_string(),
+    })? as usize;
+
+    let inputs = decode_box_array(context, "inputs")?;
+    if self_index >= inputs.len() {
+        return Err(Outcome::Panicked {
+            note: format!(
+                "context.self_index {self_index} out of range for {} inputs",
+                inputs.len()
+            ),
+        });
+    }
+    let data_inputs = decode_box_array(context, "data_inputs")?;
+    let outputs = decode_box_array(context, "outputs")?;
+
+    let headers_arr = context["headers"].as_array().ok_or_else(|| Outcome::Panicked {
+        note: "context.headers: missing or not an array".to_string(),
+    })?;
+    let mut headers = Vec::with_capacity(headers_arr.len());
+    for (i, v) in headers_arr.iter().enumerate() {
+        let hex = v.as_str().ok_or_else(|| Outcome::Panicked {
+            note: format!("context.headers[{i}]: not a hex string"),
+        })?;
+        headers.push(decode_eval_header(hex, i)?);
+    }
+
+    let ph_hex = context["pre_header_hex"].as_str().ok_or_else(|| Outcome::Panicked {
+        note: "context.pre_header_hex: missing or not a string".to_string(),
+    })?;
+    let ph_bytes = sval::hex_decode(ph_hex)
+        .map_err(|e| Outcome::Panicked { note: format!("context.pre_header_hex: bad hex: {e:?}") })?;
+    let pre_header = decode_pre_header(&ph_bytes)?;
+
+    // Per-input extensions are authoritative when present (WalkerOracle); else
+    // fall back to the legacy SELF-only `extension` at self_index. The SELF slot
+    // doubles as the top-level extension
+    // (EvalCore: `extension = inputExtensions.lift(selfIndex)`).
+    let input_extensions: Vec<Extension> = match context["input_extensions"].as_array() {
+        Some(arr) => {
+            let mut v = Vec::with_capacity(arr.len());
+            for (i, e) in arr.iter().enumerate() {
+                let map = e.as_object().ok_or_else(|| Outcome::Panicked {
+                    note: format!("context.input_extensions[{i}]: not an object"),
+                })?;
+                v.push(decode_extension_map(map, &format!("context.input_extensions[{i}]"))?);
+            }
+            v
+        }
+        None => {
+            let self_ext = match context["extension"].as_object() {
+                Some(m) => decode_extension_map(m, "context.extension")?,
+                None => Extension::new(),
+            };
+            (0..inputs.len())
+                .map(|i| if i == self_index { self_ext.clone() } else { Extension::new() })
+                .collect()
+        }
+    };
+    let extension = input_extensions.get(self_index).cloned().unwrap_or_default();
+
+    Ok(FullCtx {
+        self_index,
+        inputs,
+        data_inputs,
+        outputs,
+        headers,
+        input_extensions,
+        extension,
+        pre_header,
+    })
+}
+
+/// Evaluate one santa-eval/v6-fullctx entry against the real reconstructed
+/// context. Produces exactly one [`Outcome`] (totality, §3).
+pub fn run_entry_fullctx(
+    tree_bytes: &[u8],
+    context: &serde_json::Value,
+    activated_version: u8,
+) -> Outcome {
+    let FullCtx {
+        self_index,
+        inputs,
+        data_inputs,
+        outputs,
+        headers,
+        input_extensions,
+        extension,
+        pre_header,
+    } = match build_fullctx(context) {
+        Ok(d) => d,
+        Err(outcome) => return outcome,
+    };
+
+    // The eval tree (lenient bytes — same path as v1–v5; the blesser parses v6
+    // trees through `LenientErgoTree` too). SELF carries its OWN bytes
+    // (the decoded inputs[self_index]); the two are not coupled here.
+    let lenient = lenient_tree_bytes(tree_bytes);
+    let mut tr = VlqReader::new(&lenient);
+    let tree = match read_ergo_tree(&mut tr) {
+        Ok(t) => t,
+        Err(_) => return Outcome::Errored,
+    };
+
+    // CONTEXT.LastBlockUtxoRootHash: the parent (headers[0], tip-first) state
+    // root with all-ops-allowed / keyLength 32 (EvalCore option b). Falls back
+    // to the all-zero dummy only if headers is empty (never for v6).
+    let last_block_utxo_root = Some(match headers.first() {
+        Some(h) => AvlTreeData {
+            digest: h.state_root.to_vec(),
+            insert_allowed: true,
+            update_allowed: true,
+            remove_allowed: true,
+            key_length: 32,
+            value_length_opt: None,
+        },
+        None => dummy_avl_tree(),
+    });
+
+    let self_box = &inputs[self_index];
+    let ctx = ReductionContext {
+        height: pre_header.height,
+        self_box: Some(self_box),
+        self_creation_height: self_box.creation_height,
+        outputs: &outputs,
+        inputs: &inputs,
+        data_inputs: &data_inputs,
+        miner_pubkey: pre_header.miner_pk,
+        pre_header_timestamp: pre_header.timestamp,
+        pre_header_version: pre_header.version,
+        pre_header_parent_id: pre_header.parent_id,
+        pre_header_n_bits: pre_header.n_bits,
+        pre_header_votes: pre_header.votes,
+        extension,
+        input_extensions: &input_extensions,
+        last_headers: &headers,
+        last_block_utxo_root,
+        activated_script_version: activated_version,
+        // The PARSED tree's header version (matches EvalCore's `tree.version` /
+        // `withErgoTreeVersion`) — several v6 behaviors gate on THIS, not on the
+        // activated version.
+        ergo_tree_version: tree.version,
+    };
+
+    let mut cost = CostAccumulator::recording_only();
+    match conformance::eval_to_value_with_cost(&tree.body, &ctx, &tree.constants, &mut cost) {
+        Ok(v) => {
+            let env = sval::BoxEnv {
+                self_box,
+                inputs: &inputs,
+                outputs: &outputs,
+                data_inputs: &data_inputs,
             };
             match sval::encode_value(&v, &env) {
                 Ok(value) => Outcome::Success { value, cost: cost.total().value() },
