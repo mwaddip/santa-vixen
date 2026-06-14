@@ -75,8 +75,14 @@ Net: 1874→1877 nice. Wire unaffected.
   form (santa `4e27b84`; semantically identical to per-item `Coll/SByte`,
   35× smaller on big payloads). The 21 residuals are reject-arm shaped: the
   5 longstanding (Int+Long ArithOp coercion · Tuple.checkType_unsupported
-  ×2 · Rule1012/1019 — the rule pair may be enforced at arkadianet's
-  validation layer, which vixen's direct read_ergo_tree→eval path bypasses)
+  ×2 · **Rule1012** — real finding, verified 2026-06-14: arkadianet's
+  `read_ergo_tree` non-has_size branch enforces no `version>0 ⇒ size-bit`
+  rule, so it accepts the v3-no-size-bit tree `03050101017300` and
+  evaluates it (→ Long −1) where the JVM rejects at parse; the tree has no
+  size bit so `lenient_tree_bytes` is a no-op on it — faithfully graded,
+  not harness-coupled · **Rule1019** — separate, NOT yet traced: its tree
+  carries the size bit, so `lenient_tree_bytes` IS in play; don't assume
+  the 1012 verdict applies)
   plus authored-family candidate findings (GroupElement.canonical_bytes,
   Global.deserializeTo_Header_id_basis, FuncValue.non_unary_arity,
   atLeast.children_cap, Box basis probes) plus 2 in the new SBox
