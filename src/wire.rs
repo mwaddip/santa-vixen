@@ -10,9 +10,11 @@
 
 use ergo_primitives::reader::VlqReader;
 use ergo_primitives::writer::VlqWriter;
+use ergo_ser::ergo_tree::{read_ergo_tree, write_ergo_tree};
 use ergo_ser::sigma_type::SigmaType;
 use ergo_ser::sigma_value::{read_constant, read_value, write_constant, write_sigma_boolean, SigmaValue};
 
+use crate::eval::lenient_tree_bytes;
 use crate::sval;
 
 /// One wire entry's outcome — the round-trip analog of
@@ -74,6 +76,29 @@ fn roundtrip(kind: &str, bytes: &[u8]) -> Option<Result<Vec<u8>, ()>> {
             }
             _ => Err(()),
         },
+        // ErgoTree: a STRUCTURAL round-trip (runner-contract-wire §5,
+        // "structural, not cached"). Strip the size flag so arkadianet parses
+        // the body structurally instead of soft-fork-wrapping a size-flagged
+        // non-SigmaProp-root tree as an unparsed `true` placeholder (the
+        // prompt's "echo/wrap trap"); the original size flag is restored before
+        // re-serialize so a well-formed sized tree round-trips to its sized
+        // canonical form. The STypeVar vectors carry ill-formed-UTF-8 type-var
+        // names: arkadianet's strict `String::from_utf8` (ergo-ser
+        // sigma_type.rs) rejects them at the structural parse → `errored` — the
+        // divergence vixen surfaces (the JVM lossy-decodes to U+FFFD and
+        // canonicalizes; arkadianet doesn't lossy-decode at all).
+        "ErgoTree" => {
+            let lenient = lenient_tree_bytes(bytes);
+            let had_size = bytes.first().is_some_and(|&h| h & 0x08 != 0);
+            let mut tr = VlqReader::new(&lenient);
+            read_ergo_tree(&mut tr)
+                .map_err(drop)
+                .and_then(|mut t| {
+                    t.has_size = had_size;
+                    write_ergo_tree(&mut w, &t).map_err(drop)
+                })
+                .map(|()| w.result())
+        }
         _ => return None,
     })
 }
