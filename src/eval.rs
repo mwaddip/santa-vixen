@@ -96,7 +96,7 @@ fn decode_failure_outcome(e: sval::BridgeError, site: &str) -> Outcome {
 /// the equivalent lenient deserialize. Clearing the size bit and dropping the
 /// size VLQ routes parsing through the non-sized path, which returns the
 /// Const verbatim. (The SELF box still carries the ORIGINAL bytes.)
-fn lenient_tree_bytes(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn lenient_tree_bytes(bytes: &[u8]) -> Vec<u8> {
     const HAS_SIZE: u8 = 0x08;
     if bytes.is_empty() || bytes[0] & HAS_SIZE == 0 {
         return bytes.to_vec();

@@ -121,7 +121,15 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                 let actual = caught_actual(std::panic::AssertUnwindSafe(|| {
                     wire::run_entry(kind, bytes_hex).to_json()
                 }));
-                let expected = serde_json::json!({"bytes_hex": bytes_hex, "error": J::Null});
+                // Non-identity round-trip (e.g. santa-wire ErgoTree: a
+                // non-canonical input → JVM-canonical re-serialization): the
+                // blessed expected is `expected_bytes_hex` when present, else
+                // the round-trip is identity (expected == the input bytes).
+                let expected_hex = entry
+                    .get("expected_bytes_hex")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or(bytes_hex);
+                let expected = serde_json::json!({"bytes_hex": expected_hex, "error": J::Null});
                 return (name, actual, expected);
             }
             if is_chain {
