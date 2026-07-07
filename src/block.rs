@@ -349,6 +349,7 @@ fn validate_entry(entry: &J) -> Result<BlockOutcome, String> {
         soft_fork_state: None,
         last_headers: &last_headers,
         script_validation_checkpoint: None,
+        reemission: None,
     };
 
     match validate_full_block_parallel_with_costs(checked_header, &block_txs, &extension, &ctx) {
