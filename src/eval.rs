@@ -292,6 +292,16 @@ pub fn run_entry(
         Err(_) => return Outcome::Errored,
     };
 
+    // Rule 1012: the consensus box-script path rejects version>0 trees
+    // whose header lacks the size bit. Enforce here for the eval entry —
+    // but only for trees that GENUINELY lack the bit: when the original
+    // bytes had it set, lenient_tree_bytes stripped it for correct parsing
+    // (the ~2072 non-SigmaProp-root corpus trees), and those are legit.
+    let original_has_size_bit = !tree_bytes.is_empty() && (tree_bytes[0] & 0x08 != 0);
+    if !original_has_size_bit && tree.version != 0 {
+        return Outcome::Errored;
+    }
+
     let tx_inputs = std::slice::from_ref(&self_box);
     let avl_dummy = dummy_avl_tree();
     let ctx = ReductionContext {
@@ -598,6 +608,13 @@ pub fn run_entry_fullctx(
         Ok(t) => t,
         Err(_) => return Outcome::Errored,
     };
+
+    // Rule 1012: same guard as the v2–v5 path — enforce header size bit
+    // for trees that genuinely lack it (not the lenient-stripped corpus).
+    let original_has_size_bit = !tree_bytes.is_empty() && (tree_bytes[0] & 0x08 != 0);
+    if !original_has_size_bit && tree.version != 0 {
+        return Outcome::Errored;
+    }
 
     // CONTEXT.LastBlockUtxoRootHash: the parent (headers[0], tip-first) state
     // root with all-ops-allowed / keyLength 32 (EvalCore option b). Falls back
