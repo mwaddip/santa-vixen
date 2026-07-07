@@ -183,6 +183,7 @@ fn run_retargeting(settings: &J, payload: &J) -> Result<ChainOutcome, String> {
         v2_activation: None,
         initial_difficulty,
         desired_interval_ms: block_interval_ms,
+        use_last_epochs: 8,
     };
 
     match next_n_bits(target_height, &anchors, &config) {
