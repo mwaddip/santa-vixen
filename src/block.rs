@@ -248,6 +248,18 @@ fn validate_entry(entry: &J) -> Result<BlockOutcome, String> {
     let active = params_from_table(table)?;
     let params = ProtocolParams::from_active(&active);
 
+    // exBlockVersion (rule 410): the in-force protocol block version must
+    // equal the header version. The JVM enforces this at epoch boundaries
+    // via ErgoStateContext; arkadianet's check lives in
+    // validate_epoch_extension which the block-only runner path doesn't
+    // reach — apply it here as a direct guard.
+    if active.block_version != header.version {
+        return Ok(BlockOutcome::reject(format!(
+            "exBlockVersion: parameters blockVersion {} != header.version {}",
+            active.block_version, header.version,
+        )));
+    }
+
     // Context headers (newest-first; entry 0 = parent at H−1).
     let headers_json = entry["headers"].as_array().ok_or("headers missing")?;
     if headers_json.is_empty() {

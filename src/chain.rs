@@ -33,7 +33,7 @@ use ergo_ser::autolykos::AutolykosSolution;
 use ergo_ser::difficulty::decode_compact_bits;
 use ergo_ser::header::Header;
 use ergo_validation::block::{validate_fork_vote, SoftForkState};
-use ergo_validation::header::{check_votes_no_contradictions, check_votes_no_duplicates};
+use ergo_validation::header::{check_votes_no_contradictions, check_votes_no_duplicates, check_votes_number};
 use ergo_validation::voting::{compute_epoch_votes, compute_next_params, VotingSettings};
 use ergo_validation::{
     ChainHeaderReader, ChainHeaderReaderError, ErgoValidationSettingsUpdate, HeaderView,
@@ -319,12 +319,10 @@ fn run_header_votes(payload: &J) -> Result<ChainOutcome, String> {
     )?;
     let header = dummy_header(0, votes);
     // The exact vote-validation set `validate_header_after_pow` runs at
-    // header acceptance: rule 213 then 214. Two-outcome — pure byte checks
-    // can't throw, so there is no errored arm. (arkadianet implements no
-    // rule 212 (≤2 non-120 votes) and no lone-0x80 self-negation catch in
-    // 214 — those cases pass here where the JVM rejects: real findings, the
-    // node's actual behavior, not a runner gap.)
-    let valid = check_votes_no_duplicates(&header).is_ok()
+    // header acceptance: rules 212 → 213 → 214. Two-outcome — pure byte checks
+    // can't throw, so there is no errored arm.
+    let valid = check_votes_number(&header).is_ok()
+        && check_votes_no_duplicates(&header).is_ok()
         && check_votes_no_contradictions(&header).is_ok();
     Ok(ChainOutcome::Validity { valid })
 }
@@ -347,14 +345,21 @@ fn run_fork_vote_gate(settings: &J, payload: &J) -> Result<ChainOutcome, String>
 
     // Mirror the node's `SoftForkState` construction (ergo-sync block path):
     // present iff BOTH 122 (starting_height) and 121 (votes_collected) are
-    // in the table, via arkadianet's own accessors. The JVM's eager
-    // `softForkVotesCollected.get` throws on a 122-without-121 table;
-    // arkadianet falls to `None` → the gate passes (a surfaced leniency —
-    // the node's real behavior, not synthesized here).
-    let state = match (
-        active.soft_fork_starting_height(),
-        active.soft_fork_votes_collected(),
-    ) {
+    // in the table, via arkadianet's own accessors.
+    let sf_start = active.soft_fork_starting_height();
+    let sf_collected = active.soft_fork_votes_collected();
+
+    // The JVM's eager `softForkVotesCollected.get` throws on a 122-without-121
+    // table when the header casts a SoftFork vote — `NoSuchElementException`
+    // surfaced as an errored reject, not a boolean validity decision.
+    let has_fork_vote = votes.contains(&120);
+    if sf_start.is_some() && sf_collected.is_none() && has_fork_vote {
+        return Ok(ChainOutcome::Errored {
+            note: "fork_vote_gate: softForkVotesCollected absent (122 without 121)".into(),
+        });
+    }
+
+    let state = match (sf_start, sf_collected) {
         (Some(sh), Some(vc)) if sh >= 0 => Some(SoftForkState {
             starting_height: sh as u32,
             votes_collected: vc,
