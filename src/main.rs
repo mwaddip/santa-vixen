@@ -13,6 +13,7 @@
 //!                                          comparison — the orchestrator owns
 //!                                          the §5 comparator.
 
+mod authds;
 mod block;
 mod chain;
 mod eval;
@@ -88,6 +89,19 @@ fn caught_actual_chain<F: FnOnce() -> J + std::panic::UnwindSafe>(f: F) -> J {
     }
 }
 
+/// The authds-shaped never-panic net (santa-authds panic envelope). Note the
+/// stricter schema: `note` is present iff `error == "panicked"`, so unlike
+/// chain no other outcome may carry one.
+fn caught_actual_authds<F: FnOnce() -> J + std::panic::UnwindSafe>(f: F) -> J {
+    match std::panic::catch_unwind(f) {
+        Ok(j) => j,
+        Err(p) => {
+            let note = panic_note(p);
+            authds::AuthdsOutcome::Panicked { note: format!("panic: {note}") }.to_json()
+        }
+    }
+}
+
 /// Evaluate every entry of one vector file (blind), pairing each entry's
 /// `name` with its actual JSON and the vector's blessed `expected` JSON.
 /// Returns empty for a non-eval vector (wire/transaction — not wired yet).
@@ -102,7 +116,8 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
     let is_wire = schema.starts_with("santa-wire/");
     let is_block = schema.starts_with("santa-block/");
     let is_chain = schema.starts_with("santa-chain/");
-    if !is_eval && !is_wire && !is_block && !is_chain {
+    let is_authds = schema.starts_with("santa-authds/");
+    if !is_eval && !is_wire && !is_block && !is_chain && !is_authds {
         return Vec::new();
     }
     let entries = match vector["entries"].as_array() {
@@ -130,6 +145,20 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                     .and_then(|v| v.as_str())
                     .unwrap_or(bytes_hex);
                 let expected = serde_json::json!({"bytes_hex": expected_hex, "error": J::Null});
+                return (name, actual, expected);
+            }
+            if is_authds {
+                // The panic net is load-bearing here, not defensive boilerplate:
+                // arkadianet depends on crates.io `ergo_avltree_rust 0.1.1`,
+                // whose verifier is `.unwrap()`-heavy on malformed proofs and
+                // out-of-range params — the exact inputs the four `adverse-*`
+                // fixtures carry. A caught panic is reported AS `panicked`;
+                // it is not softened into a clean `proof_accepted: false`
+                // (runner-contract.md §3, faithful outcomes).
+                let actual = caught_actual_authds(std::panic::AssertUnwindSafe(|| {
+                    authds::run_entry(entry).to_json()
+                }));
+                let expected = entry["expected"].clone();
                 return (name, actual, expected);
             }
             if is_chain {
