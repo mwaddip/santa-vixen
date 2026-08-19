@@ -17,6 +17,7 @@ mod authds;
 mod block;
 mod chain;
 mod eval;
+mod nipopow;
 mod sval;
 mod wire;
 
@@ -117,7 +118,8 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
     let is_block = schema.starts_with("santa-block/");
     let is_chain = schema.starts_with("santa-chain/");
     let is_authds = schema.starts_with("santa-authds/");
-    if !is_eval && !is_wire && !is_block && !is_chain && !is_authds {
+    let is_nipopow = schema.starts_with("santa-nipopow/");
+    if !is_eval && !is_wire && !is_block && !is_chain && !is_authds && !is_nipopow {
         return Vec::new();
     }
     let entries = match vector["entries"].as_array() {
@@ -145,6 +147,22 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                     .and_then(|v| v.as_str())
                     .unwrap_or(bytes_hex);
                 let expected = serde_json::json!({"bytes_hex": expected_hex, "error": J::Null});
+                return (name, actual, expected);
+            }
+            if is_nipopow {
+                let chain = vector["chain"].as_array().expect("nipopow vector missing chain");
+                let kind = entry["kind"].as_str().unwrap_or("");
+                let actual = caught_actual(std::panic::AssertUnwindSafe(|| match kind {
+                    "nipopow_interlinks" => nipopow::run_interlinks(chain),
+                    "nipopow_prove" => {
+                        let m = entry["payload"]["m"].as_u64().expect("missing m") as u32;
+                        let k = entry["payload"]["k"].as_u64().expect("missing k") as u32;
+                        let hid = entry["payload"]["headerId"].as_str();
+                        nipopow::run_prove(chain, m, k, hid)
+                    }
+                    _ => serde_json::json!({"error": "not-implemented"}),
+                }));
+                let expected = entry["expected"].clone();
                 return (name, actual, expected);
             }
             if is_authds {
