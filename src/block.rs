@@ -355,6 +355,7 @@ fn validate_entry(entry: &J) -> Result<BlockOutcome, String> {
         parent: &parent_checked,
         utxo: &digest_view,
         params: &params,
+        rule_306_max_block_size: params.max_block_size, // as the node: ProtocolParams::from_active(..)
         voting_length: 128, // testnet (the corpus chain); chain constant, not in the table
         votes_unknown_rule_disabled: true,
         parent_extension: None,

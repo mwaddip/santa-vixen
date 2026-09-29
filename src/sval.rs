@@ -164,7 +164,8 @@ pub fn encode_value(v: &Value, env: &BoxEnv<'_>) -> Result<J, BridgeError> {
         Value::GroupElement(ge) => json!({"kind": "GroupElement", "bytes_hex": hex_lower(&ge[..])}),
         Value::SigmaProp(sb) => {
             let mut w = VlqWriter::new();
-            write_sigma_boolean(&mut w, sb);
+            write_sigma_boolean(&mut w, sb)
+                .map_err(|e| BridgeError::Refused(format!("write_sigma_boolean: {e:?}")))?;
             json!({"kind": "SigmaProp", "raw_hex": hex_lower(&w.result())})
         }
         Value::AvlTree(data) => {
@@ -234,7 +235,8 @@ pub fn encode_value(v: &Value, env: &BoxEnv<'_>) -> Result<J, BridgeError> {
                 .iter()
                 .map(|sb| {
                     let mut w = VlqWriter::new();
-                    write_sigma_boolean(&mut w, sb);
+                    write_sigma_boolean(&mut w, sb)
+                        .map_err(|e| BridgeError::Refused(format!("write_sigma_boolean: {e:?}")))?;
                     Ok(json!({"kind": "SigmaProp", "raw_hex": hex_lower(&w.result())}))
                 })
                 .collect();

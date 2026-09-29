@@ -305,6 +305,7 @@ pub fn run_entry(
     let tx_inputs = std::slice::from_ref(&self_box);
     let avl_dummy = dummy_avl_tree();
     let ctx = ReductionContext {
+        validation_settings: Default::default(), // as ReductionContext::minimal
         height: 0,
         self_box: Some(&self_box),
         self_creation_height: 0,
@@ -633,6 +634,7 @@ pub fn run_entry_fullctx(
 
     let self_box = &inputs[self_index];
     let ctx = ReductionContext {
+        validation_settings: Default::default(), // as ReductionContext::minimal
         height: pre_header.height,
         self_box: Some(self_box),
         self_creation_height: self_box.creation_height,

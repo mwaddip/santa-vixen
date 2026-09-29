@@ -153,6 +153,11 @@ fn verify(settings: &J, payload: &J) -> Result<AuthdsOutcome, String> {
         .as_u64()
         .ok_or("settings.key_length missing")? as usize;
     let value_length_opt = settings["value_length"].as_u64().map(|v| v as usize);
+    // The contract's operation-count bounds (null = unbounded), passed to the verifier as the
+    // oracle passes them to scrypto's BatchAVLVerifier: a proof padded past the node count they
+    // allow is rejected at construction.
+    let max_num_operations = settings["max_num_operations"].as_u64().map(|v| v as usize);
+    let max_deletes = settings["max_deletes"].as_u64().map(|v| v as usize);
 
     let digest = sval::hex_decode(
         payload["starting_digest_hex"].as_str().ok_or("payload.starting_digest_hex missing")?,
@@ -164,7 +169,7 @@ fn verify(settings: &J, payload: &J) -> Result<AuthdsOutcome, String> {
 
     // Level 1 — did a verifier build AND produce an initial digest, before any
     // operation ran. A clean crate-side rejection is `false`, not an error.
-    let mut verifier = match AvlVerifier::new(&digest, &proof, key_length, value_length_opt) {
+    let mut verifier = match AvlVerifier::new(&digest, &proof, key_length, value_length_opt, max_num_operations, max_deletes) {
         Ok(v) => v,
         Err(_) => {
             return Ok(AuthdsOutcome::Verified {

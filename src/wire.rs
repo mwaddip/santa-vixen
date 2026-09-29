@@ -70,10 +70,9 @@ fn roundtrip(kind: &str, bytes: &[u8]) -> Option<Result<Vec<u8>, ()>> {
         // No public bare read_sigma_boolean — route through the impl's
         // SSigmaProp value reader (same wire form), write the bare form back.
         "SigmaBoolean" => match read_value(&mut r, &SigmaType::SSigmaProp) {
-            Ok(SigmaValue::SigmaProp(sb)) => {
-                write_sigma_boolean(&mut w, &sb);
-                Ok(w.result())
-            }
+            Ok(SigmaValue::SigmaProp(sb)) => write_sigma_boolean(&mut w, &sb)
+                .map_err(drop)
+                .map(|()| w.result()),
             _ => Err(()),
         },
         // ErgoTree: a STRUCTURAL round-trip (runner-contract-wire §5,
