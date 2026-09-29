@@ -48,13 +48,3 @@ index 0000000..aeb0e29
 +    let mut trace = None;
 +    eval_expr(expr, ctx, constants, &mut env, &mut depth, cost, &mut trace)
 +}
-diff --git a/ergo-sigma/src/evaluator/mod.rs b/ergo-sigma/src/evaluator/mod.rs
-index 0b60445..62d7d62 100644
---- a/ergo-sigma/src/evaluator/mod.rs
-+++ b/ergo-sigma/src/evaluator/mod.rs
-@@ -11,3 +11,5 @@ pub use types::*;
- 
- #[cfg(test)]
- mod tests;
-+
-+pub mod conformance;

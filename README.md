@@ -29,17 +29,18 @@ src/          main.rs (emit + self-compare modes, never-panic net)
 arkadianet exposes no public arbitrary-root eval entry (its `reduce_expr*`
 coerce to `SigmaBoolean`; `eval_to_value` is `#[cfg(test)]`), so the build
 applies **`patches/0001-conformance-eval-hook.patch`**: one new module
-(`ergo_sigma::evaluator::conformance::eval_to_value_with_cost`) plus a
-one-line `pub mod` hunk. **Additive and consensus-inert** — no existing code
+(`ergo_sigma::evaluator::conformance::eval_to_value_with_cost`), whose one-line
+`pub mod conformance;` declaration `santa-run` appends to the end of
+`evaluator/mod.rs`. **Additive and consensus-inert** — no existing code
 path changes; DeserializeContext stays arkadianet's inline production
 behavior; the patch only exposes the evaluator's own entry with the cost
 accumulator threaded out. Applied by `santa-run` at build time and reverted
 after (the SANTA-owned checkout stays pristine for the next fetch+checkout).
 Upstreaming it as an arkadianet PR is the intended endgame. The `impl` ref
-tracks `#main` (latest tip): the patch is append-only against a stable
-14-line `mod.rs`, so conflicts are rare — when main does move under it, the
-runner shows ⚠️ could-not-build in the grid until the patch is rebased
-(`git apply --check` against the new tip is the whole pre-flight).
+tracks `#main` (latest tip). The patch only adds a file, and the declaration is appended rather than carried as a
+hunk, because arkadianet keeps editing `mod.rs`'s tail (a hunk's context broke on main `bd9c1172`). So a change to
+`mod.rs` can't break the build. Only a change to the evaluator API the module calls (`eval_expr`, `Env`,
+`ReductionContext`, `CostAccumulator`) can, and then the runner shows ⚠️ could-not-build until the module is updated.
 
 ## Status
 
@@ -104,6 +105,7 @@ For a local loop:
 ```bash
 ln -sfn ~/projects/arkadianet/ergo ~/projects/ergo   # sibling checkout, once
 git -C ../ergo apply patches/0001-conformance-eval-hook.patch
+printf '\npub mod conformance;\n' >> ../ergo/ergo-sigma/src/evaluator/mod.rs
 cargo run --release -- ../santa/vectors/eval/v5 ../santa/vectors/eval/v6
 git -C ../ergo checkout -- . && git -C ../ergo clean -fd -- ergo-sigma/src/evaluator/
 ```

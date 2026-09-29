@@ -9,8 +9,12 @@
 #
 # Build-identity patch (runner-contract §3, declared in README + patches/):
 # arkadianet exposes no public arbitrary-root eval entry, so the build applies
-# patches/0001-conformance-eval-hook.patch — additive and consensus-inert (one
-# new module + one `pub mod` line). conform's checkout step is a plain
+# patches/0001-conformance-eval-hook.patch (one new module) and appends its
+# one-line `pub mod` declaration to the end of evaluator/mod.rs — additive and
+# consensus-inert. The declaration is appended rather than carried as a hunk:
+# arkadianet keeps editing that file's tail, and a hunk's context broke on it
+# (main bd9c1172). Appended at the end it needs no context, and a module
+# declaration is valid there whatever precedes it. conform's checkout step is a plain
 # `git checkout` (no -f), so the tree MUST be pristine again afterwards or the
 # next pin bump wedges: heal any crashed previous run on entry, apply, and
 # restore via the EXIT trap (runs on success and failure alike).
@@ -39,5 +43,6 @@ restore() {
 restore   # heal a crashed previous run before applying afresh
 git -C "$repo" apply "$here/patches/0001-conformance-eval-hook.patch"
 trap restore EXIT
+printf '\npub mod conformance;\n' >> "$repo/ergo-sigma/src/evaluator/mod.rs"
 cargo build --release --manifest-path "$here/Cargo.toml" >/dev/null
 "$here/target/release/vixen" emit "$2" "$3"
