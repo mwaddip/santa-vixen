@@ -135,8 +135,11 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
                 let bytes_hex = entry["bytes_hex"]
                     .as_str()
                     .expect("wire entry missing bytes_hex");
+                let activated = entry["version"]["activated"]
+                    .as_u64()
+                    .expect("wire entry missing version.activated") as u8;
                 let actual = caught_actual(std::panic::AssertUnwindSafe(|| {
-                    wire::run_entry(kind, bytes_hex).to_json()
+                    wire::run_entry(kind, bytes_hex, activated).to_json()
                 }));
                 // Non-identity round-trip (e.g. santa-wire ErgoTree: a
                 // non-canonical input → JVM-canonical re-serialization): the

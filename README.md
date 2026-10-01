@@ -21,7 +21,10 @@ src/          main.rs (emit + self-compare modes, never-panic net)
               eval.rs (canonical context pin §2, outcome mapping §3)
               sval.rs (SValue ⇄ JSON bridge §4, both directions)
               wire.rs (byte round-trips: Constant · Box · Transaction ·
-              Header · SigmaBoolean, via ergo-ser's own codecs)
+              Header · SigmaBoolean · ErgoTree · BlockTransactions, via
+              ergo-ser's own codecs, on a reader at the entry's activated
+              version; a block section takes its context from its own
+              block version)
 ```
 
 ## The build-identity patch (runner-contract §3)
