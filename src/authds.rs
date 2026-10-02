@@ -16,48 +16,39 @@
 //! 3. **`new_digest_hex`** — the digest after the last operation, or `null` if
 //!    any operation failed (a poisoned verifier reports no digest).
 //!
-//! ## Why 20 of the 50 vendored entries are `not-implemented`
+//! ## The operations this arm grades
 //!
 //! This arm grades **arkadianet's public AVL surface**, not the underlying
-//! `ergo_avltree_rust` crate. Driving that crate directly would measure the
-//! dependency rather than the node — the same reasoning that keeps blitzen-eni
-//! off `avl_prove` (contract §6). arkadianet's `AvlVerifier` exposes only three
-//! operations that can report what the corpus expects:
+//! `ergo_avltree_rust` crate — driving that directly would measure the
+//! dependency rather than the node, the same reasoning that keeps blitzen-eni
+//! off `avl_prove` (contract §6). `AvlVerifier` reports the old/looked-up value
+//! for every operation the verify corpus uses:
 //!
-//! | Vector op | arkadianet method | reportable? |
+//! | Vector op | arkadianet method | reports |
 //! |---|---|---|
-//! | `Lookup` | `lookup` → `Option<Vec<u8>>` | yes |
-//! | `Insert` | `insert` → `()`; corpus expects `value: null` | yes |
-//! | `Remove` | `remove_returning_value` → `Option<Vec<u8>>` | yes |
-//! | `Update` | `update` → `()` — **discards the old value** | no |
-//! | `InsertOrUpdate` | `insert_or_update` → `()` — discards it too | no |
-//! | `RemoveIfExists` | `remove_with_presence` → `bool`, not the value | no |
-//! | `UpdateLongBy` | *(no method)* | no |
-//! | `UnknownModification` | *(no method)* | no |
+//! | `Lookup` | `lookup` | the looked-up value |
+//! | `Insert` | `insert` | nothing — the corpus expects `value: null` |
+//! | `Remove` | `remove_returning_value` | the removed value |
+//! | `Update` | `update` | the old value |
+//! | `InsertOrUpdate` | `insert_or_update` | the old value (null if the key was new) |
 //!
-//! The corpus expects the **old/looked-up value** for `Update`,
-//! `InsertOrUpdate` and `RemoveIfExists`; arkadianet's wrapper returns unit or a
-//! presence flag. Recovering it with a preceding `lookup` is NOT available: in a
-//! batch verifier every operation consumes proof material and advances the
-//! digest, so an injected read would corrupt the very thing being graded.
+//! `update` and `insert_or_update` gained their `Result<Option<Vec<u8>>, ()>`
+//! return in arkadianet #276; before that they returned unit, so the seven
+//! entries that use them were declared `not-implemented` for the whole entry
+//! rather than emit a `value: null` the corpus would read as a false divergence.
+//! They are graded now — all 37 `avl_verify` entries are.
 //!
-//! Emitting `value: null` for those would manufacture **false divergences** —
-//! reds caused by the adapter's blindness rather than by anything arkadianet
-//! computes wrongly. So an entry containing any non-reportable op is declared
-//! `not-implemented` for the whole entry: a blue growth-ledger cell naming a
-//! real API gap (contract §4), never coal, and never a fabricated verdict.
-//!
-//! **Consequence worth stating loudly:** the four `UnknownModification` entries
-//! are exactly the four the JVM-vs-Rust `UnknownModification` finding rests on
-//! (`docs/findings/authds-unknownmodification-jvm-vs-rust.md`). vixen is
-//! therefore **silent** on that finding — neither confirming nor refuting it.
-//! Widening `AvlVerifier` to return the operation's old value is what would let
-//! SANTA grade a second independent implementation against it.
-//!
-//! **One setting arkadianet discards:** `AvlVerifier::new` hardcodes
-//! `max_num_operations`/`max_deletes` to `None`, though the corpus declares real
-//! bounds. No current vector's expectation turns on a bound being enforced, so
-//! this is a latent over-accept surface rather than a graded divergence today.
+//! Two operations arkadianet can now also report are left out of `REPORTABLE`
+//! because no verify entry uses them yet — `remove_if_exists` and
+//! `update_long_by` (both `Result<Option<Vec<u8>>, ()>`); adding an untested arm
+//! would be building against the unbuilt, and it is one line when a vector lands.
+//! The only op arkadianet genuinely cannot report is `UnknownModification` (no
+//! method); no current verify entry uses it either. An entry carrying any op
+//! outside `REPORTABLE` is declared `not-implemented` for the whole entry — a
+//! blue growth-ledger cell naming a real API gap (contract §4), never coal, never
+//! a fabricated verdict. Emitting a guessed `value: null` instead would
+//! manufacture reds from the adapter's blindness, not from anything arkadianet
+//! computes wrong.
 
 use ergo_sigma::avl::AvlVerifier;
 use serde_json::Value as J;
@@ -65,7 +56,7 @@ use serde_json::Value as J;
 use crate::sval;
 
 /// Operations whose result arkadianet's wrapper can report faithfully.
-const REPORTABLE: [&str; 3] = ["Lookup", "Insert", "Remove"];
+const REPORTABLE: [&str; 5] = ["Lookup", "Insert", "Remove", "Update", "InsertOrUpdate"];
 
 pub enum AuthdsOutcome {
     Verified {
@@ -139,8 +130,19 @@ fn perform(v: &mut AvlVerifier, op: &J) -> Result<Option<Vec<u8>>, ()> {
         "Lookup" => v.lookup(&key),
         "Remove" => v.remove_returning_value(&key),
         "Insert" => {
+            // The corpus expects value: null for an Insert — a new key has no old value.
             let value = sval::hex_decode(op["value_hex"].as_str().ok_or(())?).map_err(|_| ())?;
             v.insert(&key, &value).map(|_| None)
+        }
+        "Update" => {
+            // Returns the old value the key held (the corpus expects it).
+            let value = sval::hex_decode(op["value_hex"].as_str().ok_or(())?).map_err(|_| ())?;
+            v.update(&key, &value)
+        }
+        "InsertOrUpdate" => {
+            // Returns the old value if the key existed, null if it was new.
+            let value = sval::hex_decode(op["value_hex"].as_str().ok_or(())?).map_err(|_| ())?;
+            v.insert_or_update(&key, &value)
         }
         // Unreachable: entries carrying anything else are declared
         // not-implemented before we get here.
