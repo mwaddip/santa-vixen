@@ -3,4 +3,4 @@
 # toolchain-agnostic). rust is rustup-delegated by mise's core backend; pinned
 # to the same version as arkadianet/ergo's rust-toolchain.toml.
 [tools]
-rust = "1.95.0"
+rust = "1.99.0"

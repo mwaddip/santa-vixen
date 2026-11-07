@@ -32,4 +32,4 @@ serde_json = "1"
 # Pinned to the same majors as arkadianet's workspace — these types appear in
 # its public API surface (ReductionContext.extension / SigmaValue::BigInt).
 indexmap = "2"
-num-bigint = "0.4"
+num-bigint = "0.5"

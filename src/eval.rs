@@ -317,7 +317,9 @@ pub fn run_entry(
         pre_header_version: activated_version + 1,
         pre_header_parent_id: [0u8; 32],
         pre_header_n_bits: 0,
-        pre_header_votes: [0u8; 3],
+        // The contract's canonical context pins votes to THREE zero bytes, not none:
+        // PreHeaderVotes::Empty would surface an empty Coll[Byte] to scripts instead.
+        pre_header_votes: [0u8; 3].into(),
         extension,
         input_extensions: &input_extensions,
         last_headers: &[],
@@ -646,7 +648,7 @@ pub fn run_entry_fullctx(
         pre_header_version: pre_header.version,
         pre_header_parent_id: pre_header.parent_id,
         pre_header_n_bits: pre_header.n_bits,
-        pre_header_votes: pre_header.votes,
+        pre_header_votes: pre_header.votes.into(),
         extension,
         input_extensions: &input_extensions,
         last_headers: &headers,
