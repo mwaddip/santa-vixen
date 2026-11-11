@@ -32,8 +32,7 @@ use ergo_validation::context::ProtocolParams;
 use ergo_validation::header::{CheckedHeader, PowCheckedHeader};
 use ergo_validation::{scala_launch_testnet, ErgoValidationSettingsUpdate};
 use ergo_rest_json::decode::decode_scala_header;
-use ergo_rest_json::decode::{decode_block_transactions_with_mode, DecodeMode};
-use ergo_rest_json::types::{ScalaBlockTransactions, ScalaHeader, ScalaPowSolutions};
+use ergo_rest_json::types::{ScalaHeader, ScalaPowSolutions};
 use serde_json::Value as J;
 
 use crate::sval;
@@ -189,25 +188,20 @@ fn validate_entry(entry: &J) -> Result<BlockOutcome, String> {
 
     let (header_bytes, header_id, header) = decode_header_json(&entry["block"]["header"])?;
 
-    // Block transactions: node-API JSON → canonical wire bytes → parsed,
-    // through the impl's own decoder (Preserve: on-chain material). The
-    // vector omits the cosmetic per-tx `size` the DTO requires; backfill 0
-    // (the decoder derives wire bytes from inputs/dataInputs/outputs only).
-    let mut bt_json = entry["block"]["blockTransactions"].clone();
-    if let Some(txs) = bt_json.get_mut("transactions").and_then(|t| t.as_array_mut()) {
-        for tx in txs {
-            if let Some(o) = tx.as_object_mut() {
-                o.entry("size").or_insert(serde_json::json!(0));
-            }
-        }
-    }
-    let bt: ScalaBlockTransactions = serde_json::from_value(bt_json)
-        .map_err(|e| format!("blockTransactions JSON: {e}"))?;
-    let bt_bytes = decode_block_transactions_with_mode(&bt, DecodeMode::Preserve)
-        .map_err(|e| format!("blockTransactions decode: {e:?}"))?;
+    // Block transactions: the section's BYTES, as a node receives them
+    // (runner-contract-block §2), parsed by the impl's own reader. Until
+    // 2026-11-11 the vector carried node-API JSON, which this arm rebuilt
+    // through the impl's Preserve-mode JSON decoder. A section a node cannot
+    // parse is a block it rejects, so a parse failure is a verdict here.
+    let bt_hex = entry["block"]["blockTransactions"]
+        .as_str()
+        .ok_or("block.blockTransactions missing or not the section's hex")?;
+    let bt_bytes = sval::hex_decode(bt_hex).map_err(|e| format!("blockTransactions hex: {e:?}"))?;
     let mut r = VlqReader::new(&bt_bytes);
-    let block_txs =
-        read_block_transactions(&mut r).map_err(|e| format!("blockTransactions re-parse: {e:?}"))?;
+    let block_txs = match read_block_transactions(&mut r) {
+        Ok(b) => b,
+        Err(e) => return Ok(BlockOutcome::reject(format!("blockTransactions parse: {e:?}"))),
+    };
 
     // Extension: header_id + raw key/value fields.
     let ext_header_id = entry["block"]["extension"]["headerId"]
