@@ -22,6 +22,7 @@ use ergo_sigma::evaluator::{conformance, EvalBox, EvalError, EvalHeader, Reducti
 use ergo_validation::test_helpers::{candidate_to_eval_box, ergo_box_to_eval_box};
 use indexmap::IndexMap;
 
+use crate::binding;
 use crate::sval;
 
 /// secp256k1 group generator, SEC1-compressed — the pinned
@@ -120,6 +121,7 @@ type Extension = IndexMap<u8, (SigmaType, SigmaValue)>;
 /// `Err(note)` for a `panicked` outcome.
 fn decode_self_registers(
     reg_map: &serde_json::Map<String, serde_json::Value>,
+    activated: u8,
 ) -> Result<AdditionalRegisters, Outcome> {
     let mut pairs: Vec<(u8, RegisterValue)> = Vec::with_capacity(reg_map.len());
     for (k, v) in reg_map {
@@ -131,8 +133,8 @@ fn decode_self_registers(
                 })
             }
         };
-        match sval::decode_constant(v) {
-            Ok((tpe, value)) => pairs.push((id, RegisterValue { tpe, value })),
+        match binding::register_binding(v, activated) {
+            Ok(rv) => pairs.push((id, rv)),
             Err(e) => return Err(decode_failure_outcome(e, &format!("v4 selfRegisters[{k}]"))),
         }
     }
@@ -207,7 +209,7 @@ pub fn run_entry(
     // v4: SELF carries custom non-mandatory registers (decoded first so a
     // malformed register map surfaces before any eval work).
     let registers = match self_registers {
-        Some(reg_map) => match decode_self_registers(reg_map) {
+        Some(reg_map) => match decode_self_registers(reg_map, activated_version) {
             Ok(r) => r,
             Err(outcome) => return outcome,
         },
@@ -217,7 +219,7 @@ pub fn run_entry(
     // v2/v4 input: a single SValue bound at context extension var 1.
     let mut extension: Extension = IndexMap::new();
     if let Some(j) = input {
-        match sval::decode_constant(j) {
+        match binding::extension_binding(j, activated_version) {
             Ok(tv) => {
                 extension.insert(1u8, tv);
             }
@@ -242,7 +244,7 @@ pub fn run_entry(
                     }
                 }
             };
-            match sval::decode_constant(v) {
+            match binding::extension_binding(v, activated_version) {
                 Ok(tv) => {
                     extension.insert(id, tv);
                 }
@@ -267,7 +269,7 @@ pub fn run_entry(
                             }
                         }
                     };
-                    match sval::decode_constant(v) {
+                    match binding::extension_binding(v, activated_version) {
                         Ok(tv) => {
                             ext.insert(id, tv);
                         }
@@ -475,13 +477,14 @@ fn decode_eval_header(hex: &str, index: usize) -> Result<EvalHeader, Outcome> {
 fn decode_extension_map(
     map: &serde_json::Map<String, serde_json::Value>,
     site: &str,
+    activated: u8,
 ) -> Result<Extension, Outcome> {
     let mut ext: Extension = IndexMap::new();
     for (k, v) in map {
         let id: u8 = k.parse().map_err(|_| Outcome::Panicked {
             note: format!("{site}: bad var id {k:?}"),
         })?;
-        match sval::decode_constant(v) {
+        match binding::extension_binding(v, activated) {
             Ok(tv) => {
                 ext.insert(id, tv);
             }
@@ -507,7 +510,7 @@ struct FullCtx {
 }
 
 /// Decode the whole `context` envelope into owned [`FullCtx`] material.
-fn build_fullctx(context: &serde_json::Value) -> Result<FullCtx, Outcome> {
+fn build_fullctx(context: &serde_json::Value, activated: u8) -> Result<FullCtx, Outcome> {
     let self_index = context["self_index"].as_u64().ok_or_else(|| Outcome::Panicked {
         note: "context.self_index: missing or not an integer".to_string(),
     })? as usize;
@@ -553,13 +556,13 @@ fn build_fullctx(context: &serde_json::Value) -> Result<FullCtx, Outcome> {
                 let map = e.as_object().ok_or_else(|| Outcome::Panicked {
                     note: format!("context.input_extensions[{i}]: not an object"),
                 })?;
-                v.push(decode_extension_map(map, &format!("context.input_extensions[{i}]"))?);
+                v.push(decode_extension_map(map, &format!("context.input_extensions[{i}]"), activated)?);
             }
             v
         }
         None => {
             let self_ext = match context["extension"].as_object() {
-                Some(m) => decode_extension_map(m, "context.extension")?,
+                Some(m) => decode_extension_map(m, "context.extension", activated)?,
                 None => Extension::new(),
             };
             (0..inputs.len())
@@ -597,7 +600,7 @@ pub fn run_entry_fullctx(
         input_extensions,
         extension,
         pre_header,
-    } = match build_fullctx(context) {
+    } = match build_fullctx(context, activated_version) {
         Ok(d) => d,
         Err(outcome) => return outcome,
     };

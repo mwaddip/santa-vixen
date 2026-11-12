@@ -15,6 +15,7 @@
 
 mod authds;
 mod block;
+mod binding;
 mod chain;
 mod eval;
 mod nipopow;
