@@ -266,7 +266,9 @@ pub fn encode_value(v: &Value, env: &BoxEnv<'_>) -> Result<J, BridgeError> {
                        {"tag": "SColl", "elem": {"tag": "SByte"}}, {"tag": "SLong"}]},
                    "items": arr})
         }
-        Value::CollGeneric(items, elem_type) => {
+        // A zip below the activation (`CollLegacyPair`) is the Coll of its visible pairs, as the JVM encodes a 4.x
+        // `PairOfCols` (`toArray`, up to the shorter side); its untruncated columns are no part of the value.
+        Value::CollGeneric(items, elem_type) | Value::CollLegacyPair(items, elem_type, _) => {
             let arr: Result<Vec<J>, _> = items.iter().map(|i| encode_value(i, env)).collect();
             json!({"kind": "Coll", "elem": encode_stype(elem_type), "items": arr?})
         }
@@ -484,6 +486,25 @@ mod tests {
         let v = sigma_to_value(&tpe, &val).expect("sigma_to_value");
         let back = with_env(|env| encode_value(&v, env)).expect("encode");
         assert_eq!(back, j, "round-trip mismatch");
+    }
+
+    /// A zip below the activation is arkadianet's `CollLegacyPair`: the visible pairs (up to the shorter side), the
+    /// element type, and the untruncated columns. Its value is the Coll of the visible pairs under the tuple type, as
+    /// the JVM encodes a 4.x `PairOfCols` (`toArray`); the columns are no part of the value. Before this arm the
+    /// value fell to the Encode gap and the entry graded `panicked` (17 rows of `Coll.zip_unequal_sides_v4`).
+    #[test]
+    fn coll_legacy_pair_encodes_its_visible_pairs() {
+        use ergo_sigma::evaluator::CollItems;
+        let pair = |a: i32, b: i64| Value::Tuple(vec![Value::Int(a), Value::Long(b)]);
+        let elem = SigmaType::STuple(vec![SigmaType::SInt, SigmaType::SLong]);
+        let columns = Some(Box::new((Value::CollInt(vec![1, 2, 3]), Value::CollLong(vec![1, 2]))));
+        let v = Value::CollLegacyPair(CollItems::new(vec![pair(1, 1), pair(2, 2)]), Box::new(elem), columns);
+        let got = with_env(|env| encode_value(&v, env)).expect("encode");
+        assert_eq!(got, json!({"kind": "Coll",
+            "elem": {"tag": "STuple", "items": [{"tag": "SInt"}, {"tag": "SLong"}]},
+            "items": [
+                {"kind": "Tuple", "items": [{"kind": "Int", "value": 1}, {"kind": "Long", "value": "1"}]},
+                {"kind": "Tuple", "items": [{"kind": "Int", "value": 2}, {"kind": "Long", "value": "2"}]}]}));
     }
 
     #[test]
