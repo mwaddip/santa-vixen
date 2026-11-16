@@ -45,4 +45,4 @@ git -C "$repo" apply "$here/patches/0001-conformance-eval-hook.patch"
 trap restore EXIT
 printf '\npub mod conformance;\n' >> "$repo/ergo-sigma/src/evaluator/mod.rs"
 cargo build --release --manifest-path "$here/Cargo.toml" >/dev/null
-"$here/target/release/vixen" emit "$2" "$3"
+${SANTA_BOUND:+"$SANTA_BOUND"} "$here/target/release/vixen" emit "$2" "$3"
