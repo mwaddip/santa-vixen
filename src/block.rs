@@ -59,13 +59,19 @@ impl BlockOutcome {
 
     pub fn to_json(&self) -> J {
         match self {
-            BlockOutcome::Verdict { valid, post_digest, cost, reason } => serde_json::json!({
-                "valid": valid,
-                "post_digest": post_digest,
-                "cost": cost,
-                "error": null,
-                "reason": reason,
-            }),
+            BlockOutcome::Verdict { valid, post_digest, cost, reason } => {
+                let mut o = serde_json::json!({
+                    "valid": valid,
+                    "post_digest": post_digest,
+                    "cost": cost,
+                    "error": null,
+                });
+                // `reason` is a string when present (the santa-block actuals schema): an accept has none.
+                if let Some(r) = reason {
+                    o["reason"] = serde_json::json!(r);
+                }
+                o
+            }
             BlockOutcome::Errored { reason } => serde_json::json!({
                 "valid": null, "post_digest": null, "cost": null,
                 "error": "errored", "reason": reason,
@@ -384,5 +390,21 @@ pub fn run_entry(entry: &J) -> BlockOutcome {
     match validate_entry(entry) {
         Ok(outcome) => outcome,
         Err(reason) => BlockOutcome::Errored { reason },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::BlockOutcome;
+
+    /// A block actual's `reason` is a string when present (the santa-block actuals schema): an accept has none, so it
+    /// carries no `reason` key, and a reject keeps its diagnostic.
+    #[test]
+    fn an_accept_carries_no_reason() {
+        let digest = "ab".repeat(33);
+        let accept =
+            BlockOutcome::Verdict { valid: true, post_digest: Some(digest.clone()), cost: Some(7), reason: None }.to_json();
+        assert_eq!(accept, serde_json::json!({"valid": true, "post_digest": digest, "cost": 7, "error": null}));
+        assert_eq!(BlockOutcome::reject("rule 216".into()).to_json()["reason"], "rule 216");
     }
 }
