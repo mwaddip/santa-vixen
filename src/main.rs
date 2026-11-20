@@ -113,20 +113,32 @@ fn run_vector_file(path: &Path) -> Vec<(String, J, J)> {
     // Dispatch on the schema discriminator: wire entries round-trip
     // `bytes_hex` (the blessed expected IS the entry's own bytes); eval
     // entries evaluate `tree_bytes_hex` against the blessed `expected`.
+    // Only the schemas this runner was written for, by exact name and version. Any other (a newer version of one of
+    // them, a tier it does not mount, or none) is not-implemented for every entry, never read as a known schema
+    // (runner-integration §3).
     let schema = vector["schema"].as_str().unwrap_or("");
-    let is_eval = schema.starts_with("santa-eval/");
-    let is_wire = schema.starts_with("santa-wire/");
-    let is_block = schema.starts_with("santa-block/");
-    let is_chain = schema.starts_with("santa-chain/");
-    let is_authds = schema.starts_with("santa-authds/");
-    let is_nipopow = schema.starts_with("santa-nipopow/");
-    if !is_eval && !is_wire && !is_block && !is_chain && !is_authds && !is_nipopow {
-        return Vec::new();
-    }
+    let is_eval = matches!(
+        schema,
+        "santa-eval/v1" | "santa-eval/v2" | "santa-eval/v3" | "santa-eval/v4" | "santa-eval/v5" | "santa-eval/v6-fullctx"
+    );
+    let is_wire = schema == "santa-wire/v1";
+    let is_block = schema == "santa-block/v1";
+    let is_chain = schema == "santa-chain/v1";
+    let is_authds = schema == "santa-authds/v1";
+    let is_nipopow = schema == "santa-nipopow/v1";
     let entries = match vector["entries"].as_array() {
         Some(e) => e,
         None => return Vec::new(),
     };
+    if !is_eval && !is_wire && !is_block && !is_chain && !is_authds && !is_nipopow {
+        return entries
+            .iter()
+            .map(|entry| {
+                let name = entry["name"].as_str().unwrap_or("<unnamed>").to_string();
+                (name, serde_json::json!({"error": "not-implemented"}), entry["expected"].clone())
+            })
+            .collect();
+    }
     entries
         .iter()
         .map(|entry| {
@@ -376,5 +388,32 @@ fn collect_vector_files(path: &Path, out: &mut Vec<PathBuf>) {
         }
     } else if path.extension().and_then(|s| s.to_str()) == Some("json") {
         out.push(path.to_path_buf());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    /// A schema the runner was not written for (a newer version of one it knows, a tier it does not mount, or none)
+    /// answers the tier-neutral `{"error": "not-implemented"}` for every entry, and is never read as a known schema:
+    /// a new envelope read as an old one shows as false divergences (runner-integration §3).
+    #[test]
+    fn an_unknown_schema_is_not_implemented() {
+        for schema in [Some("santa-eval/v99"), Some("santa-wire/v2"), Some("santa-transaction/v1"), None] {
+            // an entry a known arm would happily read: a tree and a wire kind + bytes
+            let mut vector = json!({"entries": [{
+                "name": "e#0", "tree_bytes_hex": "000402", "kind": "Constant", "bytes_hex": "0101",
+                "version": {"ergoTree": 0, "activated": 2}, "expected": {"error": null}
+            }]});
+            if let Some(s) = schema {
+                vector["schema"] = json!(s);
+            }
+            let path = std::env::temp_dir().join(format!("vixen-unknown-schema-{}.json", std::process::id()));
+            std::fs::write(&path, vector.to_string()).expect("write test vector");
+            let results = super::run_vector_file(&path);
+            assert_eq!(results.len(), 1, "{schema:?}");
+            assert_eq!(results[0].1, json!({"error": "not-implemented"}), "{schema:?}");
+        }
     }
 }
