@@ -1,7 +1,7 @@
 //! The bounded-file watchdog (runner-integration §3a): a child in its own process group, killed at its memory or wall
 //! budget, its crash described. Children run as `bash <script>`: executing a just-written script races with other test
 //! threads' forks ("text file busy").
-use santa_harness::bounds::{budget, group_kib, group_peak_kib, run_child, Budget, Outcome};
+use santa_harness::bounds::{budget, group_memory, run_child, Budget, Outcome};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -20,7 +20,7 @@ fn script(tag: &str, body: &str) -> PathBuf {
 fn run(s: &Path, memory_mb: u64, wall_s: u64) -> Outcome {
     let mut cmd = Command::new("bash");
     cmd.arg(s);
-    run_child(cmd, &Budget { memory_mb, wall_s }, &s.with_file_name("stderr"))
+    run_child(cmd, &Budget { memory_mb, wall_s }, &s.with_file_name("stderr"), None)
 }
 
 fn alive(pid: &str) -> bool {
@@ -70,8 +70,9 @@ fn a_clean_child_finishes() {
 
 #[test]
 fn a_budget_is_the_envelopes_limits() {
-    assert_eq!(budget(&json!({"limits": {"memory_mb": 1280, "wall_s": 10}})), Some(Budget { memory_mb: 1280, wall_s: 10 }));
-    assert_eq!(budget(&json!({"entries": []})), None);
+    assert_eq!(budget(&json!({"limits": {"memory_mb": 1280, "wall_s": 10}})), Ok(Some(Budget { memory_mb: 1280, wall_s: 10 })));
+    assert_eq!(budget(&json!({"entries": []})), Ok(None));
+    assert!(budget(&json!({"limits": {"memory_mb": "lots", "wall_s": 10}})).is_err(), "a malformed budget runs unbounded");
 }
 
 /// A process's peak resident size counts, not only its current one: a spike that is over before the next poll is
@@ -87,7 +88,8 @@ fn the_peak_is_seen_after_the_memory_is_freed() {
     }
     std::thread::sleep(Duration::from_millis(50));
     let pid: i32 = fs::read_to_string(&flag).unwrap().trim().parse().unwrap();
-    let (now, peak) = (group_kib(pid), group_peak_kib(pid));
+    let m = group_memory(pid);
+    let (now, peak) = (m.now_kib, m.peak_kib);
     let _ = child.kill();
     let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
     let _ = child.wait();
@@ -95,10 +97,30 @@ fn the_peak_is_seen_after_the_memory_is_freed() {
     assert!(now < 64 * 1024, "now {now} KiB");
 }
 
-/// A child whose peak passed the budget is exceeded memory even when it finished: the spike was missed between polls
-/// but the reaped child's peak (ru_maxrss) shows it.
+/// A child that reports its own peak (as the runner's `one` verb does) and passed the budget is exceeded memory, even
+/// when the spike fell between two polls.
 #[test]
-fn a_spike_that_finishes_is_exceeded_memory() {
-    let s = script("spike", "exec python3 -I -c 'x = b\"x\" * (100 << 20)\ndel x'");
-    assert_eq!(run(&s, 64, 30), Outcome::Exceeded("memory"));
+fn a_reported_peak_past_the_budget_is_exceeded_memory() {
+    let s = script("reported", "exec python3 -I -c 'import sys\nx = b\"x\" * (100 << 20)\ndel x\nhwm = [l.split()[1] for l in open(\"/proc/self/status\") if l.startswith(\"VmHWM:\")][0]\nopen(sys.argv[1], \"w\").write(hwm)' \"$(dirname \"$0\")/peak\"");
+    let mut cmd = Command::new("bash");
+    cmd.arg(&s);
+    let out = run_child(cmd, &Budget { memory_mb: 64, wall_s: 30 }, &s.with_file_name("stderr"), Some(&s.with_file_name("peak")));
+    assert_eq!(out, Outcome::Exceeded("memory"));
+}
+
+/// The parent's own memory never counts against a child: a forked child's rusage carries the parent's resident size
+/// at the fork, so the watchdog must not use it.
+#[test]
+fn a_parent_holding_memory_does_not_count_against_its_child() {
+    let held: Vec<u8> = vec![1; 128 << 20];
+    assert_eq!(run(&script("parent", "true"), 64, 30), Outcome::Finished);
+    assert_eq!(held.iter().map(|b| *b as u64).sum::<u64>(), 128 << 20);
+}
+
+/// The allocation-failure phrase is the out-of-memory signature only on an abort (SIGABRT): a child that printed it
+/// and exited otherwise crashed.
+#[test]
+fn the_phrase_alone_is_not_out_of_memory() {
+    let s = script("phrase", "echo 'memory allocation of 1024 bytes failed' >&2\nexit 101");
+    assert_eq!(run(&s, 1024, 30), Outcome::Crashed("process exit status 101".into()));
 }

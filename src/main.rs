@@ -1,17 +1,13 @@
 //! Vixen — the arkadianet/ergo runner for the SANTA conformance suite
 //! (eval tier; wire + transaction to follow).
 //!
-//! Two modes — `eval::run_entry` produces actuals **blind** (never reads
-//! `expected`) in both:
-//!   vixen <vector.json | dir> [...]        self-compare: run each entry,
-//!                                          compare vs the blessed `expected`,
-//!                                          print nice/coal. Dirs recurse.
-//!   vixen emit <vectors-dir> <out-dir>     emit actuals for the SANTA
-//!                                          orchestrator: one actuals file per
-//!                                          vector, mapping entry name →
-//!                                          { value, cost, error }. No
-//!                                          comparison — the orchestrator owns
-//!                                          the §5 comparator.
+//! The modes — the actuals are produced **blind** (never reading `expected`) in all:
+//!   vixen run <runner.json> <santa-dir> <out-dir>  the self-contained runner (SANTA's
+//!                                          runner-integration §3), through harness/: select,
+//!                                          run, bound, grade, write results.json and actuals/.
+//!   vixen one <santa-dir> <relpath> <out-file>     a bounded file's child.
+//!   vixen <vector.json | dir> [...]        self-compare: run each entry, compare vs the
+//!                                          blessed `expected`, print nice/coal. Dirs recurse.
 
 mod authds;
 mod block;
@@ -331,7 +327,7 @@ fn self_compare(paths: &[String]) {
             // `reason` (block/tx) and `note` (chain errored) are
             // diagnostic-only — never graded; strip both for the equality
             // so a clean reject isn't coal'd on its diagnostic string.
-            // Emit mode still writes them (schema fields).
+            // The actuals still carry them (schema fields).
             let mut actual_cmp = actual.clone();
             if let Some(o) = actual_cmp.as_object_mut() {
                 o.remove("reason");

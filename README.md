@@ -5,8 +5,10 @@ for the [SANTA](https://github.com/mwaddip/santa) conformance suite. The
 independent one: a from-scratch Rust node sharing no consensus code with the
 JVM reference, sigma-rust, ergots, or Fleet.
 
-A thin adapter per the SANTA runner contracts: vector in → blind
-`{value, cost, error}` actuals out; the orchestrator owns the comparison.
+A self-contained SANTA runner: it selects the vector files its scope covers from a SANTA checkout,
+runs them through arkadianet/ergo blind (never reading `expected` to answer), grades the answers by
+SANTA's grading rules, and writes `results.json` and `actuals/` (SANTA's runner-integration §3, §4);
+SANTA re-grades the actuals as a canary.
 
 ```
 runner.json   manifest — name/label, version v6, tiers [eval, wire], cost
@@ -18,9 +20,6 @@ santa-run     entrypoint: mise self-provision → wire ../ergo to the SANTA
 mise.toml     rust 1.95.0 (matches arkadianet's rust-toolchain.toml)
 patches/      the declared build-identity override (see below)
 src/          main.rs (run / one through harness/, self-compare, never-panic net)
-harness/      SANTA's self-contained-runner harness (copied from santa-blitzen): the oracle
-              checks, selection, grading, the bounded-file watchdog, results.json;
-              SANTA_DIR=<santa> cargo test --manifest-path harness/Cargo.toml
               eval.rs (canonical context pin §2, outcome mapping §3)
               sval.rs (SValue ⇄ JSON bridge §4, both directions)
               wire.rs (byte round-trips: Constant · Box · Transaction ·
@@ -28,6 +27,9 @@ harness/      SANTA's self-contained-runner harness (copied from santa-blitzen):
               ergo-ser's own codecs, on a reader at the entry's activated
               version; a block section takes its context from its own
               block version)
+harness/      SANTA's self-contained-runner harness (copied from santa-blitzen): the oracle
+              checks, selection, grading, the bounded-file watchdog, results.json;
+              SANTA_DIR=<santa> cargo test --manifest-path harness/Cargo.toml
 ```
 
 ## The build-identity patch (runner-contract §3)

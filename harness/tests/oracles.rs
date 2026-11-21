@@ -94,6 +94,7 @@ fn read_scope_refuses_what_conform_refuses() {
         json!({"version": "any", "tiers": ["eval"]}),
         json!({"version": "v6", "tiers": ["wire"], "kinds": []}),
         json!({"version": "v6", "tiers": ["wire"], "kinds": ["Boxes"]}),
+        json!({"version": "v6", "tiers": ["eval"], "activations": false}),
     ] {
         assert!(scope(bad.clone()).is_err(), "accepted {bad}");
     }

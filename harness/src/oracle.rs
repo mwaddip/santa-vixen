@@ -62,8 +62,10 @@ fn verdicts(doc: &Value, g: &Grading) -> Result<(), String> {
 /// `grading.json` `{}`, a non-JSON file some text.
 fn selections(doc: &Value) -> Result<(), String> {
     let n = TREE_SEQ.fetch_add(1, Ordering::Relaxed);
-    let root = std::env::temp_dir().join(format!("santa-harness-selection-{}-{n}", std::process::id()));
-    let _ = fs::remove_dir_all(&root);
+    let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0);
+    let root = std::env::temp_dir().join(format!("santa-harness-selection-{}-{n}-{nanos}", std::process::id()));
+    // a fresh directory of our own: refuse one that already exists rather than write into it
+    fs::create_dir(&root).map_err(|e| format!("{}: {e}", root.display()))?;
     let vectors = root.join("vectors");
     let result = (|| {
         for f in doc["files"].as_array().ok_or("no files")? {

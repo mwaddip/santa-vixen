@@ -93,6 +93,7 @@ fn a_skipped_entry_grades_red() {
     assert_eq!(r["totals"]["red"], 1);
     let reds: Vec<&Value> = r["slices"].as_object().unwrap().values().flat_map(|sl| sl["red"].as_array().unwrap()).collect();
     assert_eq!(reds[0]["entry"], json!(first.borrow().clone().unwrap()));
+    assert_eq!(reds[0]["dim"], "value", "a chain entry left unanswered is red on its value");
 }
 
 #[test]
@@ -111,4 +112,22 @@ fn a_wrong_oracle_stops_the_run() {
     let out = d.join("out");
     assert!(main_run(&runner_json(&d), &fake, &out, &honest).is_err());
     assert!(!out.join("results.json").exists());
+}
+
+/// The bounded path end to end: the fixture binary (src/bin/santa-harness-fixture.rs, an honest runner) runs as `run`
+/// and re-invokes itself as `one` for every bounded file, under the watchdog.
+#[test]
+fn bounded_files_run_as_children_of_the_runner() {
+    let s = santa();
+    let d = temp("bounded");
+    let rj = d.join("runner.json");
+    fs::write(&rj, json!({"version": "v6", "tiers": ["eval"]}).to_string()).unwrap();
+    let out = d.join("out");
+    let st = Command::new(env!("CARGO_BIN_EXE_santa-harness-fixture")).arg("run").arg(&rj).arg(&s).arg(&out).status().unwrap();
+    assert!(st.success());
+    let r = results(&out);
+    let bounded = "eval/v6/authored/Global.serialize_shared_nested_bounded_G_size_only_32768x4096.json";
+    let a: Value = serde_json::from_str(&fs::read_to_string(out.join("actuals").join(bounded)).unwrap()).unwrap();
+    assert!(a.as_object().is_some_and(|m| !m.is_empty() && m.values().all(|x| x.get("error").is_some_and(|e| e != "exceeded" && e != "panicked"))), "{a}");
+    assert_eq!(r["totals"]["red"], 0, "an honest runner is all nice, its bounded files run as children");
 }

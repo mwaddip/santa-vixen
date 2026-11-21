@@ -37,10 +37,15 @@ pub struct Scope {
     pub activation: bool,
 }
 
-/// The scope keys of a runner.json (any other key, such as SANTA's `name` or `impl`, is ignored). Refused as SANTA's
-/// conform refuses them: an unknown version; empty, unknown or repeated tiers; empty, unknown or repeated kinds, or
-/// kinds without the wire tier; a flag that is not a boolean.
+/// The scope keys of a runner.json (SANTA's own keys — `name`, `label`, `impl`, `control`, `runner` — are allowed and
+/// ignored). Refused as SANTA's conform refuses them: an unknown key; an unknown version; empty, unknown or repeated
+/// tiers; empty, unknown or repeated kinds, or kinds without the wire tier; a flag that is not a boolean.
 pub fn parse_scope(j: &Value) -> Result<Scope, String> {
+    // SANTA's entry keys and the scope keys: a misspelt key would silently fall back to a default and change the scope
+    const KEYS: [&str; 10] = ["name", "label", "impl", "control", "runner", "version", "tiers", "cost", "kinds", "activation"];
+    if let Some(k) = j.as_object().ok_or("runner.json: not an object")?.keys().find(|k| !KEYS.contains(&k.as_str())) {
+        return Err(format!("runner.json: unknown key {k:?}; known: {KEYS:?}"));
+    }
     let version = j["version"].as_str().ok_or("runner.json: no \"version\"")?.to_string();
     if !VERSIONS.contains(&version.as_str()) {
         return Err(format!("runner.json: unknown version {version:?}; known: {VERSIONS:?}"));
@@ -138,13 +143,14 @@ fn each_entry(doc: &Value, a: Value) -> BTreeMap<String, Value> {
 /// A bounded file, run as the runner's own child (`<this binary> one <santa> <rel> <out-file>`) under its budget.
 fn run_bounded(santa: &Path, f: &selection::VectorFile, doc: &Value, b: &bounds::Budget, dir: &Path, n: usize) -> BTreeMap<String, Value> {
     let out_file = dir.join(format!("{n}.json"));
+    let peak = peak_file(&out_file);
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => return each_entry(doc, json!({"error": "panicked", "note": format!("cannot find this runner's binary: {e}")})),
     };
     let mut cmd = Command::new(exe);
     cmd.arg("one").arg(santa).arg(&f.rel).arg(&out_file);
-    match bounds::run_child(cmd, b, &dir.join(format!("{n}.stderr"))) {
+    match bounds::run_child(cmd, b, &dir.join(format!("{n}.stderr")), Some(&peak)) {
         bounds::Outcome::Finished => match read_json(&out_file) {
             Ok(Value::Object(m)) => m.into_iter().collect(),
             _ => each_entry(doc, json!({"error": "panicked", "note": "the bounded child wrote no actuals"})),
@@ -170,7 +176,10 @@ pub fn main_run(runner_json: &Path, santa: &Path, out: &Path, run_file: RunFile)
     for (n, f) in files.iter().enumerate() {
         let path = vectors.join(&f.rel);
         let doc = read_json(&path)?;
-        let actuals = match bounds::budget(&doc) {
+        let actuals = match bounds::budget(&doc).map_err(|e| format!("vectors/{}: {e}", f.rel))? {
+            Some(_) if !cfg!(target_os = "linux") => {
+                return Err(format!("vectors/{}: a bounded file needs Linux (the watchdog reads /proc); this platform cannot bound it", f.rel));
+            }
             Some(b) => run_bounded(santa, f, &doc, &b, &children, n),
             None => run_file(&path, &doc),
         };
@@ -192,9 +201,24 @@ pub fn main_run(runner_json: &Path, santa: &Path, out: &Path, run_file: RunFile)
     Ok(())
 }
 
-/// `<bin> one <santa-dir> <relpath> <out-file>`: a bounded file's child runs that one file and writes its actuals.
+/// Where a bounded child reports its own peak resident size: `<out-file>.peak`.
+fn peak_file(out_file: &Path) -> std::path::PathBuf {
+    let mut s = out_file.as_os_str().to_owned();
+    s.push(".peak");
+    s.into()
+}
+
+/// `<bin> one <santa-dir> <relpath> <out-file>`: a bounded file's child runs that one file, writes its actuals, and
+/// reports its own peak resident size (its VmHWM, KiB) to `<out-file>.peak` for the parent's budget check.
 pub fn main_one(santa: &Path, rel: &str, out_file: &Path, run_file: RunFile) -> Result<(), String> {
     let path = santa.join("vectors").join(rel);
     let doc = read_json(&path)?;
-    write_json(out_file, &json!(run_file(&path, &doc)))
+    write_json(out_file, &json!(run_file(&path, &doc)))?;
+    let hwm = fs::read_to_string("/proc/self/status").ok().and_then(|s| {
+        s.lines().find(|l| l.starts_with("VmHWM:")).and_then(|l| l.split_whitespace().nth(1).map(String::from))
+    });
+    if let Some(kib) = hwm {
+        fs::write(peak_file(out_file), kib).map_err(|e| format!("{}: {e}", out_file.display()))?;
+    }
+    Ok(())
 }

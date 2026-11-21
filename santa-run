@@ -28,7 +28,10 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -z "${SANTA_MISE_ACTIVE:-}" ]; then
   mise trust "$here/mise.toml" >/dev/null
   mise --cd "$here" install
-  exec env SANTA_MISE_ACTIVE=1 mise --cd "$here" exec -- "$0" "$@"
+  # `mise --cd` changes the working directory: resolve the three paths (and this script) first
+  abs() { if [ "$1" = "-" ]; then echo -; else realpath -m "$1"; fi; }
+  set -- "$(abs "$1")" "$(abs "$2")" "$(abs "$3")"
+  exec env SANTA_MISE_ACTIVE=1 mise --cd "$here" exec -- "$here/$(basename "$0")" "$@"
 fi
 impl="$(cd "$1" && pwd)"
 repo="$impl/ergo"

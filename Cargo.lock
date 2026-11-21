@@ -713,6 +713,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "santa-harness"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde_json",
+]
+
+[[package]]
 name = "sec1"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -954,6 +962,7 @@ dependencies = [
  "ergo-validation",
  "indexmap",
  "num-bigint",
+ "santa-harness",
  "serde_json",
 ]
 
