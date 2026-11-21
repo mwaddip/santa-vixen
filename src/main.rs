@@ -23,24 +23,38 @@ mod sval;
 mod wire;
 
 use serde_json::Value as J;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+/// The harness's runner function: one vector file → its actuals by entry name.
+fn run_file(path: &Path, _doc: &J) -> BTreeMap<String, J> {
+    run_vector_file(path).into_iter().map(|(name, actual, _expected)| (name, actual)).collect()
+}
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    match args.get(1).map(String::as_str) {
-        Some("emit") => {
-            if args.len() < 4 {
-                eprintln!("usage: vixen emit <vectors-dir> <out-dir>");
-                std::process::exit(2);
-            }
-            emit(Path::new(&args[2]), Path::new(&args[3]));
+    let done = |r: Result<(), String>| {
+        if let Err(e) = r {
+            eprintln!("vixen: {e}");
+            std::process::exit(1);
         }
-        Some(_) => self_compare(&args[1..]),
-        None => {
+    };
+    match args.get(1).map(String::as_str) {
+        // the self-contained runner (SANTA's runner-integration §3), through the harness (harness/)
+        Some("run") if args.len() == 5 => {
+            done(santa_harness::main_run(Path::new(&args[2]), Path::new(&args[3]), Path::new(&args[4]), &run_file))
+        }
+        // a bounded file's child
+        Some("one") if args.len() == 5 => {
+            done(santa_harness::main_one(Path::new(&args[2]), &args[3], Path::new(&args[4]), &run_file))
+        }
+        Some(a) if a != "run" && a != "one" => self_compare(&args[1..]),
+        _ => {
             eprintln!(
                 "usage:\n  \
-                 vixen <vector.json | dir> [...]    self-compare vs blessed expected\n  \
-                 vixen emit <vectors-dir> <out-dir>  emit actuals for the SANTA orchestrator"
+                 vixen run <runner.json> <santa-dir> <out-dir>  the self-contained runner\n  \
+                 vixen one <santa-dir> <relpath> <out-file>     a bounded file's child\n  \
+                 vixen <vector.json | dir> [...]                self-compare vs blessed expected"
             );
             std::process::exit(2);
         }
@@ -346,41 +360,8 @@ fn self_compare(paths: &[String]) {
     }
 }
 
-/// Emit mode: write one actuals file per vector (`<out-dir>/<same-filename>`),
-/// each an object mapping entry `name` → its `{ value, cost, error }`. Blind —
-/// never reads `expected`. Exit 0 once every actuals file is written.
-fn emit(vectors_dir: &Path, out_dir: &Path) {
-    let mut files: Vec<PathBuf> = Vec::new();
-    collect_vector_files(vectors_dir, &mut files);
-    files.sort();
-    if files.is_empty() {
-        eprintln!("no .json vector files found at {}", vectors_dir.display());
-        std::process::exit(2);
-    }
-    std::fs::create_dir_all(out_dir).expect("create out dir");
-
-    let mut written = 0u64;
-    for f in &files {
-        let entries = run_vector_file(f);
-        if entries.is_empty() {
-            continue; // not an eval vector → no actuals file
-        }
-        let mut actuals = serde_json::Map::new();
-        for (name, actual, _expected) in entries {
-            actuals.insert(name, actual);
-        }
-        let filename = f.file_name().expect("vector filename");
-        let out_path = out_dir.join(filename);
-        let text = serde_json::to_string_pretty(&J::Object(actuals)).expect("serialize actuals");
-        std::fs::write(&out_path, text).expect("write actuals file");
-        written += 1;
-    }
-    eprintln!("vixen emit: wrote {written} actuals files to {}", out_dir.display());
-}
-
-/// Collect `.json` vector files; directories recurse (the committed corpus
-/// nests as vectors/eval/<version>/<provenance>/, while the orchestrator
-/// stages flat — both shapes work).
+/// Collect `.json` vector files for self-compare; directories recurse (the corpus nests as
+/// vectors/<tier>/<version>/<provenance>/).
 fn collect_vector_files(path: &Path, out: &mut Vec<PathBuf>) {
     if path.is_dir() {
         for e in std::fs::read_dir(path).expect("read dir").flatten() {

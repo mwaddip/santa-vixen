@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# santa-run <impl-path> <vectors-dir> <out-dir>  — emit actuals for the orchestrator.
+# santa-run <impl-path> <santa-dir> <out-dir>  — the self-contained runner (SANTA's runner-integration §3): `vixen
+# run` selects from the SANTA checkout, runs, bounds, grades and writes results.json and actuals/ (the harness).
 #
 # SANTA owns the impl checkout (runner-integration contract §2-3): it clones
 # runner.json's `impl` (<url>#<ref>) into a per-instance cache and passes the
 # containing dir as $1; our dependency is at $1/ergo (the arkadianet/ergo
 # workspace). Wire our fixed Cargo path-dep (../ergo) to that checkout, then
-# build + emit.
+# build + run.
 #
 # Build-identity patch (runner-contract §3, declared in README + patches/):
 # arkadianet exposes no public arbitrary-root eval entry, so the build applies
@@ -45,4 +46,4 @@ git -C "$repo" apply "$here/patches/0001-conformance-eval-hook.patch"
 trap restore EXIT
 printf '\npub mod conformance;\n' >> "$repo/ergo-sigma/src/evaluator/mod.rs"
 cargo build --release --manifest-path "$here/Cargo.toml" >/dev/null
-${SANTA_BOUND:+"$SANTA_BOUND"} "$here/target/release/vixen" emit "$2" "$3"
+"$here/target/release/vixen" run "$here/runner.json" "$2" "$3"

@@ -13,11 +13,14 @@ runner.json   manifest — name/label, version v6, tiers [eval, wire], cost
               true, impl = arkadianet/ergo #main (bare branch — latest tip;
               conform records the resolved sha per run)
 santa-run     entrypoint: mise self-provision → wire ../ergo to the SANTA
-              checkout → apply the build-identity patch → build → emit →
+              checkout → apply the build-identity patch → build → run →
               restore the checkout (EXIT trap)
 mise.toml     rust 1.95.0 (matches arkadianet's rust-toolchain.toml)
 patches/      the declared build-identity override (see below)
-src/          main.rs (emit + self-compare modes, never-panic net)
+src/          main.rs (run / one through harness/, self-compare, never-panic net)
+harness/      SANTA's self-contained-runner harness (copied from santa-blitzen): the oracle
+              checks, selection, grading, the bounded-file watchdog, results.json;
+              SANTA_DIR=<santa> cargo test --manifest-path harness/Cargo.toml
               eval.rs (canonical context pin §2, outcome mapping §3)
               sval.rs (SValue ⇄ JSON bridge §4, both directions)
               wire.rs (byte round-trips: Constant · Box · Transaction ·

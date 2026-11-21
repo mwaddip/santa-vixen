@@ -29,6 +29,9 @@ ergo-rest-json = { path = "../ergo/ergo-rest-json" }
 ergo-crypto = { path = "../ergo/ergo-crypto" }
 ergo-chain-spec = { path = "../ergo/ergo-chain-spec" }
 serde_json = "1"
+# SANTA's self-contained-runner harness: selection, the grading interpreter, the oracle checks, the bounded-file
+# watchdog, results.json. A crate in this repo (copied from santa-blitzen's; keep the copies identical).
+santa-harness = { path = "harness" }
 # Pinned to the same majors as arkadianet's workspace — these types appear in
 # its public API surface (ReductionContext.extension / SigmaValue::BigInt).
 indexmap = "2"
