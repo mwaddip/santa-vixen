@@ -124,6 +124,59 @@ fn wrong_oracle_santa(tag: &str) -> Temp {
     fake
 }
 
+/// A small SANTA checkout: SANTA's oracle/ and grading.json, and the given vector files (relative path, body).
+fn small_santa(tag: &str, files: &[(&str, &str)]) -> Temp {
+    let s = santa();
+    let t = temp(tag);
+    fs::create_dir_all(t.join("vectors")).unwrap();
+    fs::create_dir_all(t.join("oracle")).unwrap();
+    fs::copy(s.join("vectors/grading.json"), t.join("vectors/grading.json")).unwrap();
+    for o in ["verdicts-grading.json", "selection.json"] {
+        fs::copy(s.join("oracle").join(o), t.join("oracle").join(o)).unwrap();
+    }
+    for (rel, body) in files {
+        let p = t.join("vectors").join(rel);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(p, body).unwrap();
+    }
+    t
+}
+
+/// A vector file whose entries repeat a name stops the run, naming it: actuals are keyed by name, so one entry would
+/// be graded against another's answer.
+#[test]
+fn a_vector_file_with_a_repeated_entry_name_stops_the_run() {
+    let doc = json!({"schema": "santa-chain/v1", "entries": [{"name": "a", "expected": {}}, {"name": "a", "expected": {}}]});
+    let t = small_santa("repeated", &[("chain/v4/spec/Twice.json", &doc.to_string())]);
+    let d = temp("repeated-out");
+    let e = main_run(&runner_json(&d), &t, &d.join("out"), &honest).unwrap_err();
+    assert!(e.contains("Twice.json") && e.contains("used twice") && e.contains('a'), "{e}");
+}
+
+/// A run that fails part-way leaves no `.children/` behind in its out-dir.
+#[test]
+fn a_failed_run_leaves_no_children_directory() {
+    let t = small_santa("broken", &[("chain/v4/spec/Broken.json", "not json")]);
+    let d = temp("broken-out");
+    let out = d.join("out");
+    assert!(main_run(&runner_json(&d), &t, &out, &honest).is_err());
+    assert!(!out.join(".children").exists(), "a failed run left .children/");
+}
+
+/// The out-dir may not be the SANTA checkout itself nor lie in its vectors/ or oracle/ (a runner never writes into
+/// the checkout's tree); conform's own out-dirs, under the checkout's ignored .santa/, are fine.
+#[test]
+fn an_out_dir_in_the_santa_checkouts_tree_is_refused() {
+    let t = small_santa("out-in-tree", &[]);
+    let d = temp("out-in-tree-rj");
+    for out in [t.to_path_buf(), t.join("vectors").join("out"), t.join("oracle"), t.join("vectors").join(".").join("x")] {
+        let e = main_run(&runner_json(&d), &t, &out, &honest).unwrap_err();
+        assert!(e.contains("inside the SANTA checkout"), "{}: {e}", out.display());
+    }
+    assert!(!t.join("results.json").exists() && !t.join("actuals").exists(), "the run wrote into the checkout");
+    main_run(&runner_json(&d), &t, &t.join(".santa").join("r").join("out"), &honest).unwrap();
+}
+
 /// A run removes the previous run's results.json and actuals/ before anything else, so one that fails leaves none.
 #[test]
 fn a_run_clears_the_previous_results_before_anything_else() {

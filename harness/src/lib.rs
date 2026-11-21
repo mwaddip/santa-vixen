@@ -164,6 +164,7 @@ fn run_bounded(santa: &Path, f: &selection::VectorFile, doc: &Value, b: &bounds:
 /// run every selected file (a bounded one as a child under its budget, the rest through `run_file`), write
 /// `actuals/<rel>`, grade every entry, write `results.json`, print a line per slice. Err: the runner could not run.
 pub fn main_run(runner_json: &Path, santa: &Path, out: &Path, run_file: RunFile) -> Result<(), String> {
+    check_out_dir(santa, out)?;
     // before anything else: a run that fails leaves no earlier run's results behind (runner-integration §4.3)
     clear(&out.join("results.json"))?;
     clear(&out.join("actuals"))?;
@@ -176,30 +177,90 @@ pub fn main_run(runner_json: &Path, santa: &Path, out: &Path, run_file: RunFile)
     let children = out.join(".children");
     fs::create_dir_all(&children).map_err(|e| format!("{}: {e}", children.display()))?;
     let mut tally = results::Tally::default();
-    for (n, f) in files.iter().enumerate() {
-        let path = vectors.join(&f.rel);
-        let doc = read_json(&path)?;
-        let actuals = match bounds::budget(&doc).map_err(|e| format!("vectors/{}: {e}", f.rel))? {
-            Some(_) if !cfg!(target_os = "linux") => {
-                return Err(format!("vectors/{}: a bounded file needs Linux (the watchdog reads /proc); this platform cannot bound it", f.rel));
+    // the files run in a closure, so `.children/` goes whether the run ends or fails
+    let ran = (|| -> Result<(), String> {
+        for (n, f) in files.iter().enumerate() {
+            let path = vectors.join(&f.rel);
+            let doc = read_json(&path)?;
+            let twice = repeated_names(&doc);
+            if !twice.is_empty() {
+                return Err(format!("vectors/{}: entry names used twice: {} (actuals are keyed by name)", f.rel, twice.join(", ")));
             }
-            Some(b) => run_bounded(santa, f, &doc, &b, &children, n),
-            None => run_file(&path, &doc),
-        };
-        write_json(&out.join("actuals").join(&f.rel), &json!(actuals))?;
-        let label = grading.label_for(&f.tier, &doc).map_err(|e| format!("vectors/{}: {e}", f.rel))?;
-        tally.add_file(f);
-        for e in doc["entries"].as_array().into_iter().flatten() {
-            let actual = e["name"].as_str().and_then(|n| actuals.get(n));
-            let input = grading::Input { entry: e, actual, file: &doc, claims_cost: scope.cost };
-            let v = grading.grade(label, &input).map_err(|err| format!("vectors/{}: {err}", f.rel))?;
-            tally.add_verdict(f, e, actual, &v);
+            let actuals = match bounds::budget(&doc).map_err(|e| format!("vectors/{}: {e}", f.rel))? {
+                Some(_) if !cfg!(target_os = "linux") => {
+                    return Err(format!("vectors/{}: a bounded file needs Linux (the watchdog reads /proc); this platform cannot bound it", f.rel));
+                }
+                Some(b) => run_bounded(santa, f, &doc, &b, &children, n),
+                None => run_file(&path, &doc),
+            };
+            write_json(&out.join("actuals").join(&f.rel), &json!(actuals))?;
+            let label = grading.label_for(&f.tier, &doc).map_err(|e| format!("vectors/{}: {e}", f.rel))?;
+            tally.add_file(f);
+            for e in doc["entries"].as_array().into_iter().flatten() {
+                let actual = e["name"].as_str().and_then(|n| actuals.get(n));
+                let input = grading::Input { entry: e, actual, file: &doc, claims_cost: scope.cost };
+                let v = grading.grade(label, &input).map_err(|err| format!("vectors/{}: {err}", f.rel))?;
+                tally.add_verdict(f, e, actual, &v);
+            }
         }
-    }
+        Ok(())
+    })();
     let _ = fs::remove_dir_all(&children);
+    ran?;
     write_json(&out.join("results.json"), &tally.results_json(santa_commit(santa), &scope))?;
     for line in tally.summary() {
         println!("{line}");
+    }
+    Ok(())
+}
+
+/// The entry names a vector file uses more than once, in order of first repeat.
+fn repeated_names(doc: &Value) -> Vec<String> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut twice: Vec<String> = Vec::new();
+    for n in doc["entries"].as_array().into_iter().flatten().filter_map(|e| e["name"].as_str()) {
+        if !seen.insert(n) && !twice.iter().any(|t| t == n) {
+            twice.push(n.to_string());
+        }
+    }
+    twice
+}
+
+/// `<out-dir>` may be neither the SANTA checkout itself nor inside the data the runner reads (`vectors/`,
+/// `oracle/`): a runner never writes into the checkout's tree (runner-integration §3). conform's own out-dirs, under
+/// the checkout's ignored `.santa/`, are fine. Compared by real path; the out-dir need not exist yet.
+fn check_out_dir(santa: &Path, out: &Path) -> Result<(), String> {
+    fn real(p: &Path) -> std::path::PathBuf {
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            std::env::current_dir().map(|d| d.join(p)).unwrap_or_else(|_| p.to_path_buf())
+        };
+        // the nearest existing ancestor by its real path, the rest appended
+        let mut base = abs.clone();
+        let mut rest = Vec::new();
+        loop {
+            if let Ok(mut r) = base.canonicalize() {
+                for c in rest.iter().rev() {
+                    r.push(c);
+                }
+                return r;
+            }
+            match (base.file_name().map(|n| n.to_os_string()), base.parent()) {
+                (Some(n), Some(up)) => {
+                    rest.push(n);
+                    base = up.to_path_buf();
+                }
+                _ => return abs,
+            }
+        }
+    }
+    let (s, o) = (real(santa), real(out));
+    if o == s || o.starts_with(s.join("vectors")) || o.starts_with(s.join("oracle")) {
+        return Err(format!(
+            "{}: the out-dir is inside the SANTA checkout's own tree (its root, vectors/ or oracle/); a runner never writes there",
+            out.display()
+        ));
     }
     Ok(())
 }
