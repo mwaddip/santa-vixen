@@ -164,6 +164,9 @@ fn run_bounded(santa: &Path, f: &selection::VectorFile, doc: &Value, b: &bounds:
 /// run every selected file (a bounded one as a child under its budget, the rest through `run_file`), write
 /// `actuals/<rel>`, grade every entry, write `results.json`, print a line per slice. Err: the runner could not run.
 pub fn main_run(runner_json: &Path, santa: &Path, out: &Path, run_file: RunFile) -> Result<(), String> {
+    // before anything else: a run that fails leaves no earlier run's results behind (runner-integration §4.3)
+    clear(&out.join("results.json"))?;
+    clear(&out.join("actuals"))?;
     let scope = read_scope(runner_json)?;
     let grading = grading::Grading::parse(&read_json(&santa.join("vectors").join("grading.json"))?)
         .map_err(|e| format!("vectors/grading.json: {e}"))?;
@@ -199,6 +202,19 @@ pub fn main_run(runner_json: &Path, santa: &Path, out: &Path, run_file: RunFile)
         println!("{line}");
     }
     Ok(())
+}
+
+/// Removes a file or a directory tree (a link itself, never its target); absent is fine.
+fn clear(p: &Path) -> Result<(), String> {
+    let r = match fs::symlink_metadata(p) {
+        Ok(m) if m.is_dir() => fs::remove_dir_all(p),
+        Ok(_) => fs::remove_file(p),
+        Err(e) => Err(e),
+    };
+    match r {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{}: {e}", p.display())),
+        _ => Ok(()),
+    }
 }
 
 /// Where a bounded child reports its own peak resident size: `<out-file>.peak`.

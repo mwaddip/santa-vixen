@@ -1,14 +1,60 @@
 //! The bounded-file watchdog (runner-integration §3a): a bounded file's entry runs in a child process in a process
 //! group of its own (setpgid, never a new session), under an RLIMIT_DATA backstop; the parent polls the group's
-//! resident memory (VmRSS + VmSwap) and each process's peak (VmHWM) every 10 ms, and kills the group past
-//! `memory_mb`, or past `wall_s`. A child that finished and reported its own peak past the budget is exceeded too: a
-//! spike between two polls counts, as a cgroup bound would have killed it there.
+//! resident memory (VmRSS + VmSwap) and each process's peak (VmHWM), with 10 ms between polls, and kills the group
+//! past `memory_mb`, or past `wall_s`. A child that finished and reported its own peak past the budget is exceeded
+//! too: a spike between two polls counts, as a cgroup bound would have killed it there. A runner interrupted
+//! (SIGINT, SIGTERM, SIGHUP) while a child runs kills the child's group, then dies of the same signal: the group
+//! outlives its runner otherwise (a terminal's Ctrl-C never reaches it).
 use serde_json::Value;
 use std::fs;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
+
+/// The signal that interrupted the runner while a bounded child ran (0: none).
+static INTERRUPTED: AtomicI32 = AtomicI32::new(0);
+/// The signals that end a runner: trapped while a bounded child runs.
+const TRAPPED: [libc::c_int; 3] = [libc::SIGINT, libc::SIGTERM, libc::SIGHUP];
+
+extern "C" fn on_signal(sig: libc::c_int) {
+    INTERRUPTED.store(sig, Ordering::SeqCst);
+}
+
+/// The runner's SIGINT / SIGTERM / SIGHUP trapped while a bounded child runs; the previous dispositions restored on
+/// drop.
+struct Trap {
+    old: [libc::sigaction; 3],
+}
+
+impl Trap {
+    fn install() -> Trap {
+        INTERRUPTED.store(0, Ordering::SeqCst);
+        // SAFETY: the handler only stores into an atomic (async-signal-safe); sigaction writes only the locals.
+        unsafe {
+            let mut sa: libc::sigaction = std::mem::zeroed();
+            sa.sa_sigaction = on_signal as extern "C" fn(libc::c_int) as usize;
+            libc::sigemptyset(&mut sa.sa_mask);
+            let mut old: [libc::sigaction; 3] = std::mem::zeroed();
+            for (i, s) in TRAPPED.iter().enumerate() {
+                libc::sigaction(*s, &sa, &mut old[i]);
+            }
+            Trap { old }
+        }
+    }
+}
+
+impl Drop for Trap {
+    fn drop(&mut self) {
+        // SAFETY: restores the dispositions saved at install.
+        unsafe {
+            for (i, s) in TRAPPED.iter().enumerate() {
+                libc::sigaction(*s, &self.old[i], std::ptr::null_mut());
+            }
+        }
+    }
+}
 
 /// A bounded file's budget: memory in MiB, wall-clock time in seconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -106,7 +152,8 @@ fn reap(pid: i32) -> std::process::ExitStatus {
 /// Runs `cmd` as a bounded child: its own process group, the backstop, stderr to `stderr` (read for the runtime's
 /// out-of-memory signature), the group killed past the budget or once the child ends. A child that finishes and
 /// wrote its own peak resident size (KiB) to `peak_report` past the budget is exceeded too: its parent cannot learn
-/// it otherwise (a forked child's rusage carries the parent's memory at the fork).
+/// it otherwise (a forked child's rusage carries the parent's memory at the fork). Interrupted (SIGINT, SIGTERM,
+/// SIGHUP) meanwhile, it kills the child's group and the runner dies of that signal.
 pub fn run_child(mut cmd: Command, b: &Budget, stderr: &Path, peak_report: Option<&Path>) -> Outcome {
     let err = match fs::File::create(stderr) {
         Ok(f) => f,
@@ -126,6 +173,7 @@ pub fn run_child(mut cmd: Command, b: &Budget, stderr: &Path, peak_report: Optio
             Ok(())
         });
     }
+    let trap = Trap::install();
     // the child is reaped here (waitid, waitpid), never through the handle
     let child = match cmd.stdin(Stdio::null()).stderr(err).spawn() {
         Ok(c) => c,
@@ -135,6 +183,18 @@ pub fn run_child(mut cmd: Command, b: &Budget, stderr: &Path, peak_report: Optio
     let deadline = Instant::now() + Duration::from_secs(b.wall_s);
     let over = |kib: u64| kib > b.memory_mb * 1024;
     loop {
+        let sig = INTERRUPTED.load(Ordering::SeqCst);
+        if sig != 0 {
+            kill_group(pgid);
+            reap(pgid);
+            drop(trap);
+            // SAFETY: re-raises the signal under the disposition the runner had before the child.
+            unsafe {
+                libc::raise(sig);
+            }
+            // a handler of the runner's own took it and returned: the runner was still told to stop
+            std::process::exit(128 + sig);
+        }
         if ended(pgid) {
             kill_group(pgid);
             let status = reap(pgid);

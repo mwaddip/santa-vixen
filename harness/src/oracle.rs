@@ -70,6 +70,10 @@ fn selections(doc: &Value) -> Result<(), String> {
     let result = (|| {
         for f in doc["files"].as_array().ok_or("no files")? {
             let rel = f["path"].as_str().ok_or("a file without a path")?;
+            // a path the tree cannot hold (absolute, or climbing out with `..`) is refused before anything is written
+            if rel.is_empty() || !Path::new(rel).components().all(|c| matches!(c, std::path::Component::Normal(_))) {
+                return Err(format!("a file path that leaves the tree: {rel:?}"));
+            }
             let path = vectors.join(rel);
             fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
             let body = if let Some(kind) = f.get("kind") {

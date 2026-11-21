@@ -5,16 +5,33 @@ use santa_harness::bounds::{budget, group_memory, run_child, Budget, Outcome};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::os::unix::process::ExitStatusExt;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-fn script(tag: &str, body: &str) -> PathBuf {
+/// A script in a scratch directory of its own, the directory removed when the test ends.
+struct Script(PathBuf);
+impl std::ops::Deref for Script {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+impl Drop for Script {
+    fn drop(&mut self) {
+        if let Some(d) = self.0.parent() {
+            let _ = fs::remove_dir_all(d);
+        }
+    }
+}
+
+fn script(tag: &str, body: &str) -> Script {
     let d = std::env::temp_dir().join(format!("santa-harness-bounds-{}-{tag}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
     let s = d.join("run.sh");
     fs::write(&s, format!("#!/usr/bin/env bash\n{body}\n")).unwrap();
-    s
+    Script(s)
 }
 
 fn run(s: &Path, memory_mb: u64, wall_s: u64) -> Outcome {
@@ -27,6 +44,29 @@ fn alive(pid: &str) -> bool {
     fs::read_to_string(format!("/proc/{}/stat", pid.trim()))
         .map(|st| !st.rsplit(')').next().unwrap_or("").trim_start().starts_with('Z'))
         .unwrap_or(false)
+}
+
+/// An interrupted runner (SIGINT while a bounded child runs) kills the child's group and dies of the same signal: the
+/// child sits in a group of its own, so a terminal's Ctrl-C never reaches it. The fixture runs the child under
+/// run_child and is sent the signal.
+#[test]
+fn an_interrupted_runner_kills_its_childs_group_and_dies_of_the_signal() {
+    let s = script("interrupted", "sleep 30 &\necho $! > \"$(dirname \"$0\")/child.pid\"\nsleep 30");
+    let pid_file = s.with_file_name("child.pid");
+    let mut fixture = Command::new(env!("CARGO_BIN_EXE_santa-harness-fixture")).arg("hold").arg(&*s).spawn().unwrap();
+    let t0 = Instant::now();
+    while !pid_file.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(10), "the child never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    // SAFETY: a signal to the fixture we spawned.
+    unsafe {
+        libc::kill(fixture.id() as i32, libc::SIGINT);
+    }
+    assert_eq!(fixture.wait().unwrap().signal(), Some(libc::SIGINT), "the runner dies of the signal it was sent");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!alive(&fs::read_to_string(&pid_file).unwrap()), "the grandchild outlived its runner");
 }
 
 #[test]
@@ -80,7 +120,7 @@ fn a_budget_is_the_envelopes_limits() {
 #[test]
 fn the_peak_is_seen_after_the_memory_is_freed() {
     let s = script("peak", "exec python3 -I -c 'import os, sys, time\nos.setpgid(0, 0)\nx = b\"x\" * (100 << 20)\ndel x\nopen(sys.argv[1], \"w\").write(str(os.getpid()))\ntime.sleep(10)' \"$(dirname \"$0\")/freed\"");
-    let mut child = Command::new("bash").arg(&s).spawn().unwrap();
+    let mut child = Command::new("bash").arg(&*s).spawn().unwrap();
     let flag = s.with_file_name("freed");
     let t0 = Instant::now();
     while !flag.is_file() && t0.elapsed() < Duration::from_secs(10) {
@@ -103,7 +143,7 @@ fn the_peak_is_seen_after_the_memory_is_freed() {
 fn a_reported_peak_past_the_budget_is_exceeded_memory() {
     let s = script("reported", "exec python3 -I -c 'import sys\nx = b\"x\" * (100 << 20)\ndel x\nhwm = [l.split()[1] for l in open(\"/proc/self/status\") if l.startswith(\"VmHWM:\")][0]\nopen(sys.argv[1], \"w\").write(hwm)' \"$(dirname \"$0\")/peak\"");
     let mut cmd = Command::new("bash");
-    cmd.arg(&s);
+    cmd.arg(&*s);
     let out = run_child(cmd, &Budget { memory_mb: 64, wall_s: 30 }, &s.with_file_name("stderr"), Some(&s.with_file_name("peak")));
     assert_eq!(out, Outcome::Exceeded("memory"));
 }

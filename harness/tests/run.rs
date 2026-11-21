@@ -23,11 +23,25 @@ fn santa() -> PathBuf {
     }
 }
 
-fn temp(tag: &str) -> PathBuf {
+/// A test's scratch directory, removed when the test ends.
+struct Temp(PathBuf);
+impl std::ops::Deref for Temp {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.0
+    }
+}
+impl Drop for Temp {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp(tag: &str) -> Temp {
     let d = std::env::temp_dir().join(format!("santa-harness-run-{}-{tag}", std::process::id()));
     let _ = fs::remove_dir_all(&d);
     fs::create_dir_all(&d).unwrap();
-    d
+    Temp(d)
 }
 
 fn runner_json(dir: &Path) -> PathBuf {
@@ -94,6 +108,34 @@ fn a_skipped_entry_grades_red() {
     let reds: Vec<&Value> = r["slices"].as_object().unwrap().values().flat_map(|sl| sl["red"].as_array().unwrap()).collect();
     assert_eq!(reds[0]["entry"], json!(first.borrow().clone().unwrap()));
     assert_eq!(reds[0]["dim"], "value", "a chain entry left unanswered is red on its value");
+}
+
+/// A SANTA checkout whose verdict oracle is wrong: a run against it stops at the oracle check.
+fn wrong_oracle_santa(tag: &str) -> Temp {
+    let s = santa();
+    let fake = temp(tag);
+    fs::create_dir_all(fake.join("vectors")).unwrap();
+    fs::create_dir_all(fake.join("oracle")).unwrap();
+    fs::copy(s.join("vectors/grading.json"), fake.join("vectors/grading.json")).unwrap();
+    fs::copy(s.join("oracle/selection.json"), fake.join("oracle/selection.json")).unwrap();
+    let mut doc: Value = serde_json::from_str(&fs::read_to_string(s.join("oracle/verdicts-grading.json")).unwrap()).unwrap();
+    doc["cases"][0]["verdict"] = json!({"outcome": "panicked"});
+    fs::write(fake.join("oracle/verdicts-grading.json"), doc.to_string()).unwrap();
+    fake
+}
+
+/// A run removes the previous run's results.json and actuals/ before anything else, so one that fails leaves none.
+#[test]
+fn a_run_clears_the_previous_results_before_anything_else() {
+    let fake = wrong_oracle_santa("clears-santa");
+    let d = temp("clears");
+    let out = d.join("out");
+    fs::create_dir_all(out.join("actuals/chain/v4/spec")).unwrap();
+    fs::write(out.join("results.json"), "{}").unwrap();
+    fs::write(out.join("actuals/chain/v4/spec/old.json"), "{}").unwrap();
+    assert!(main_run(&runner_json(&d), &fake, &out, &honest).is_err());
+    assert!(!out.join("results.json").exists(), "an earlier results.json survived a failed run");
+    assert!(!out.join("actuals").exists(), "earlier actuals survived a failed run");
 }
 
 #[test]
