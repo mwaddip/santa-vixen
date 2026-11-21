@@ -177,6 +177,25 @@ fn an_out_dir_in_the_santa_checkouts_tree_is_refused() {
     main_run(&runner_json(&d), &t, &t.join(".santa").join("r").join("out"), &honest).unwrap();
 }
 
+/// The out-dir may not contain the SANTA checkout: a checkout at <out-dir>/actuals would be the run's first deletion.
+#[test]
+fn an_out_dir_containing_the_santa_checkout_is_refused() {
+    let s = santa();
+    let d = temp("out-contains");
+    let out = d.join("out");
+    let inner = out.join("actuals");
+    for dir in ["vectors", "oracle"] {
+        fs::create_dir_all(inner.join(dir)).unwrap();
+    }
+    fs::copy(s.join("vectors/grading.json"), inner.join("vectors/grading.json")).unwrap();
+    for o in ["verdicts-grading.json", "selection.json"] {
+        fs::copy(s.join("oracle").join(o), inner.join("oracle").join(o)).unwrap();
+    }
+    let e = main_run(&runner_json(&d), &inner, &out, &honest).unwrap_err();
+    assert!(e.contains("contains the SANTA checkout"), "{e}");
+    assert!(inner.join("vectors/grading.json").exists(), "the run deleted the SANTA checkout");
+}
+
 /// A run removes the previous run's results.json and actuals/ before anything else, so one that fails leaves none.
 #[test]
 fn a_run_clears_the_previous_results_before_anything_else() {

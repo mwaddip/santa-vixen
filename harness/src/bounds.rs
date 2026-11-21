@@ -153,8 +153,9 @@ fn reap(pid: i32) -> std::process::ExitStatus {
 /// out-of-memory signature), the group killed past the budget or once the child ends. A child that finishes and
 /// wrote its own peak resident size (KiB) to `peak_report` past the budget is exceeded too: its parent cannot learn
 /// it otherwise (a forked child's rusage carries the parent's memory at the fork). Interrupted (SIGINT, SIGTERM,
-/// SIGHUP) meanwhile, it kills the child's group and the runner dies of that signal.
-pub fn run_child(mut cmd: Command, b: &Budget, stderr: &Path, peak_report: Option<&Path>) -> Outcome {
+/// SIGHUP) meanwhile, it kills the child's group, removes `scratch` (the run's `.children/`, which the run's own cleanup
+/// can no longer reach), and the runner dies of that signal.
+pub fn run_child(mut cmd: Command, b: &Budget, stderr: &Path, peak_report: Option<&Path>, scratch: Option<&Path>) -> Outcome {
     let err = match fs::File::create(stderr) {
         Ok(f) => f,
         Err(e) => return Outcome::Crashed(format!("cannot open {}: {e}", stderr.display())),
@@ -187,6 +188,9 @@ pub fn run_child(mut cmd: Command, b: &Budget, stderr: &Path, peak_report: Optio
         if sig != 0 {
             kill_group(pgid);
             reap(pgid);
+            if let Some(d) = scratch {
+                let _ = fs::remove_dir_all(d);
+            }
             drop(trap);
             // SAFETY: re-raises the signal under the disposition the runner had before the child.
             unsafe {

@@ -37,7 +37,7 @@ fn script(tag: &str, body: &str) -> Script {
 fn run(s: &Path, memory_mb: u64, wall_s: u64) -> Outcome {
     let mut cmd = Command::new("bash");
     cmd.arg(s);
-    run_child(cmd, &Budget { memory_mb, wall_s }, &s.with_file_name("stderr"), None)
+    run_child(cmd, &Budget { memory_mb, wall_s }, &s.with_file_name("stderr"), None, None)
 }
 
 fn alive(pid: &str) -> bool {
@@ -67,6 +67,31 @@ fn an_interrupted_runner_kills_its_childs_group_and_dies_of_the_signal() {
     assert_eq!(fixture.wait().unwrap().signal(), Some(libc::SIGINT), "the runner dies of the signal it was sent");
     std::thread::sleep(Duration::from_millis(200));
     assert!(!alive(&fs::read_to_string(&pid_file).unwrap()), "the grandchild outlived its runner");
+}
+
+/// An interrupted runner also removes its scratch directory (main_run's .children/) before it dies: the signal it
+/// re-raises ends it before main_run's own cleanup could run.
+#[test]
+fn an_interrupted_runner_removes_its_scratch_directory() {
+    let s = script("interrupted-scratch", "sleep 30 &\necho $! > \"$(dirname \"$0\")/child.pid\"\nsleep 30");
+    let scratch = s.with_file_name("children");
+    fs::create_dir_all(&scratch).unwrap();
+    fs::write(scratch.join("0.stderr"), "").unwrap();
+    let pid_file = s.with_file_name("child.pid");
+    let mut fixture =
+        Command::new(env!("CARGO_BIN_EXE_santa-harness-fixture")).arg("hold").arg(&*s).arg(&scratch).spawn().unwrap();
+    let t0 = Instant::now();
+    while !pid_file.exists() {
+        assert!(t0.elapsed() < Duration::from_secs(10), "the child never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    std::thread::sleep(Duration::from_millis(50));
+    // SAFETY: a signal to the fixture we spawned.
+    unsafe {
+        libc::kill(fixture.id() as i32, libc::SIGINT);
+    }
+    assert_eq!(fixture.wait().unwrap().signal(), Some(libc::SIGINT));
+    assert!(!scratch.exists(), "the scratch directory outlived the interrupted runner");
 }
 
 #[test]
@@ -144,7 +169,7 @@ fn a_reported_peak_past_the_budget_is_exceeded_memory() {
     let s = script("reported", "exec python3 -I -c 'import sys\nx = b\"x\" * (100 << 20)\ndel x\nhwm = [l.split()[1] for l in open(\"/proc/self/status\") if l.startswith(\"VmHWM:\")][0]\nopen(sys.argv[1], \"w\").write(hwm)' \"$(dirname \"$0\")/peak\"");
     let mut cmd = Command::new("bash");
     cmd.arg(&*s);
-    let out = run_child(cmd, &Budget { memory_mb: 64, wall_s: 30 }, &s.with_file_name("stderr"), Some(&s.with_file_name("peak")));
+    let out = run_child(cmd, &Budget { memory_mb: 64, wall_s: 30 }, &s.with_file_name("stderr"), Some(&s.with_file_name("peak")), None);
     assert_eq!(out, Outcome::Exceeded("memory"));
 }
 

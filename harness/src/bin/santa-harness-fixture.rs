@@ -22,16 +22,18 @@ fn main() {
     let r = match a.get(1).map(String::as_str) {
         Some("run") if a.len() == 5 => santa_harness::main_run(Path::new(&a[2]), Path::new(&a[3]), Path::new(&a[4]), &honest),
         Some("one") if a.len() == 5 => santa_harness::main_one(Path::new(&a[2]), &a[3], Path::new(&a[4]), &honest),
-        // the interruption test: `bash <script>` as a bounded child, held until the fixture is signalled
-        Some("hold") if a.len() == 3 => {
+        // the interruption tests: `bash <script>` as a bounded child, held until the fixture is signalled; with a
+        // scratch directory, the one an interrupted runner removes
+        Some("hold") if a.len() == 3 || a.len() == 4 => {
             let script = Path::new(&a[2]);
             let mut cmd = std::process::Command::new("bash");
             cmd.arg(script);
             let b = santa_harness::bounds::Budget { memory_mb: 1024, wall_s: 60 };
-            santa_harness::bounds::run_child(cmd, &b, &script.with_file_name("stderr"), None);
+            let scratch = a.get(3).map(Path::new);
+            santa_harness::bounds::run_child(cmd, &b, &script.with_file_name("stderr"), None, scratch);
             Ok(())
         }
-        _ => Err("usage: santa-harness-fixture run <runner.json> <santa-dir> <out-dir> | one <santa-dir> <relpath> <out-file> | hold <script>".into()),
+        _ => Err("usage: santa-harness-fixture run <runner.json> <santa-dir> <out-dir> | one <santa-dir> <relpath> <out-file> | hold <script> [<scratch-dir>]".into()),
     };
     if let Err(e) = r {
         eprintln!("{e}");

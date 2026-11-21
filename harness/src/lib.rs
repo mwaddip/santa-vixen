@@ -150,7 +150,7 @@ fn run_bounded(santa: &Path, f: &selection::VectorFile, doc: &Value, b: &bounds:
     };
     let mut cmd = Command::new(exe);
     cmd.arg("one").arg(santa).arg(&f.rel).arg(&out_file);
-    match bounds::run_child(cmd, b, &dir.join(format!("{n}.stderr")), Some(&peak)) {
+    match bounds::run_child(cmd, b, &dir.join(format!("{n}.stderr")), Some(&peak), Some(dir)) {
         bounds::Outcome::Finished => match read_json(&out_file) {
             Ok(Value::Object(m)) => m.into_iter().collect(),
             _ => each_entry(doc, json!({"error": "panicked", "note": "the bounded child wrote no actuals"})),
@@ -168,6 +168,7 @@ pub fn main_run(runner_json: &Path, santa: &Path, out: &Path, run_file: RunFile)
     // before anything else: a run that fails leaves no earlier run's results behind (runner-integration §4.3)
     clear(&out.join("results.json"))?;
     clear(&out.join("actuals"))?;
+    clear(&out.join(".children"))?;
     let scope = read_scope(runner_json)?;
     let grading = grading::Grading::parse(&read_json(&santa.join("vectors").join("grading.json"))?)
         .map_err(|e| format!("vectors/grading.json: {e}"))?;
@@ -227,7 +228,8 @@ fn repeated_names(doc: &Value) -> Vec<String> {
 }
 
 /// `<out-dir>` may be neither the SANTA checkout itself nor inside the data the runner reads (`vectors/`,
-/// `oracle/`): a runner never writes into the checkout's tree (runner-integration §3). conform's own out-dirs, under
+/// `oracle/`), nor contain the checkout: a runner never writes into the checkout's tree, and never clears it
+/// (runner-integration §3). conform's own out-dirs, under
 /// the checkout's ignored `.santa/`, are fine. Compared by real path; the out-dir need not exist yet.
 fn check_out_dir(santa: &Path, out: &Path) -> Result<(), String> {
     fn real(p: &Path) -> std::path::PathBuf {
@@ -261,6 +263,10 @@ fn check_out_dir(santa: &Path, out: &Path) -> Result<(), String> {
             "{}: the out-dir is inside the SANTA checkout's own tree (its root, vectors/ or oracle/); a runner never writes there",
             out.display()
         ));
+    }
+    // the run's first step clears <out-dir>/actuals and .children: a checkout under the out-dir could be among them
+    if s.starts_with(&o) {
+        return Err(format!("{}: the out-dir contains the SANTA checkout ({})", out.display(), s.display()));
     }
     Ok(())
 }
