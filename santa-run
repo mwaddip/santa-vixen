@@ -49,4 +49,9 @@ git -C "$repo" apply "$here/patches/0001-conformance-eval-hook.patch"
 trap restore EXIT
 printf '\npub mod conformance;\n' >> "$repo/ergo-sigma/src/evaluator/mod.rs"
 cargo build --release --manifest-path "$here/Cargo.toml" >/dev/null
-"$here/target/release/vixen" run "$here/runner.json" "$2" "$3"
+# the built binary does not read the patched source: restore the checkout now, before the run
+restore
+trap - EXIT
+# exec: the runner takes this script's pid, so a signal sent to santa-run reaches it (and it takes a bounded child's
+# group with it, runner-integration §3a); a runner left as bash's child would run on under pid 1 after bash died.
+exec "$here/target/release/vixen" run "$here/runner.json" "$2" "$3"
